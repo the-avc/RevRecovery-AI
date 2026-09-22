@@ -1,0 +1,90 @@
+# ==========================================
+# Environment & Secrets (NEVER COMMIT)
+# ==========================================
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Always allow .env.example templates
+!.env.example
+!**/.env.example
+
+# ==========================================
+# Node.js & Web (client, server-node)
+# ==========================================
+node_modules/
+dist/
+dist-ssr/
+build/
+*.local
+.npm
+.vite/
+.turbo/
+*.tsbuildinfo
+
+# Node logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ==========================================
+# Python (server-python)
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Audio outputs (generated at runtime)
+server-python/audio_files/*.mp3
+server-python/audio_files/*.wav
+!server-python/audio_files/.gitkeep
+audio_files/*.mp3
+audio_files/*.wav
+!audio_files/.gitkeep
+
+# ==========================================
+# OS & IDE Files
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.sublime-workspace
+*.sublime-project
+*.swp
+*.swo
+*~

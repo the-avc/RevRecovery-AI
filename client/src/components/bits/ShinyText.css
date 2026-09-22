@@ -1,0 +1,14 @@
+/* ShinyText.css */
+.shiny-text {
+  background: linear-gradient(
+    120deg,
+    var(--shiny-color, #b5b5b5) 40%,
+    var(--shine-color, #ffffff) 50%,
+    var(--shiny-color, #b5b5b5) 60%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  display: inline-block;
+}

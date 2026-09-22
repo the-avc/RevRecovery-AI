@@ -1,0 +1,165 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Every person who might owe us money
+model Customer {
+  id           String        @id @default(cuid())
+  name         String
+  email        String
+  phone        String?
+  type         CustomerType  @default(B2C) // B2C = individual, B2B = business
+  company      String?                      // For B2B customers
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+}
+
+// Every revenue event - success OR failure
+model Transaction {
+  id                 String              @id @default(cuid())
+  customerId         String
+  customer           Customer            @relation(fields: [customerId], references: [id])
+  
+  razorpayPaymentId  String?             // Actual Razorpay payment ID if available
+  razorpayOrderId    String?
+  razorpayLinkId     String?             // Recovery payment link ID
+  
+  amount             Float               // In INR
+  currency           String              @default("INR")
+  status             TransactionStatus   @default(FAILED)
+  failureType        FailureType         // What kind of failure is this
+  errorCode          String?             // Razorpay error code e.g. BAD_REQUEST_ERROR
+  errorDescription   String?             // Human-readable error description
+  
+  // For subscriptions & mandates
+  subscriptionId     String?
+  mandateId          String?
+  retryCount         Int                 @default(0)
+  
+  // For B2B invoices
+  invoiceId          String?
+  invoiceDueDate     DateTime?
+  
+  // For checkout drop-offs
+  cartItems          Json?               // Array of cart items
+  
+  // Promise-to-pay tracking
+  promisedPayDate    DateTime?           // Customer said they'll pay by this date
+  
+  recoveredAmount    Float?              // How much we actually recovered
+  recoveredAt        DateTime?
+  
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  
+  recoveryActions    RecoveryAction[]
+  auditLogs          AuditLog[]
+}
+
+// Every AI decision and action taken
+model RecoveryAction {
+  id              String          @id @default(cuid())
+  transactionId   String
+  transaction     Transaction     @relation(fields: [transactionId], references: [id])
+  
+  actionType      ActionType      // What we decided to do
+  status          ActionStatus    @default(PENDING)
+  
+  // AI Decision data
+  aiRootCause     String?         // What the AI diagnosed as the problem
+  aiReasoning     String?         // Why the AI chose this action
+  aiConfidence    Float?          // 0-1 probability score from our ML model
+  recoveryProb    Float?          // Predicted P(recovery) from math model
+  
+  // Execution data
+  paymentLinkUrl  String?         // Generated Razorpay link
+  paymentLinkId   String?         // Razorpay link ID for tracking
+  emailSentAt     DateTime?
+  smsSentAt       DateTime?
+  voiceCallAt     DateTime?
+  voiceAudioPath  String?         // Path to Hinglish TTS audio file
+  
+  scheduledFor    DateTime?       // For delayed actions
+  executedAt      DateTime?
+  
+  // Stopping rule: was this cancelled because user already paid?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+// Immutable audit trail of every system event
+model AuditLog {
+  id            String      @id @default(cuid())
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+  
+  event         String      // e.g. "WEBHOOK_RECEIVED", "AI_DECISION_MADE", "PAYMENT_LINK_GENERATED"
+  actor         String      // "RAZORPAY_WEBHOOK", "AI_AGENT", "CRON_JOB", "USER"
+  details       Json        // Full details of the event
+  
+  createdAt     DateTime    @default(now())
+}
+
+// Recovery batch runs for tracking
+model RecoveryBatch {
+  id             String   @id @default(cuid())
+  totalAtRisk    Float
+  totalRecovered Float    @default(0)
+  transactionCount Int
+  recoveredCount Int      @default(0)
+  startedAt      DateTime @default(now())
+  completedAt    DateTime?
+  status         String   @default("RUNNING")
+}
+
+enum CustomerType {
+  B2C
+  B2B
+}
+
+enum TransactionStatus {
+  FAILED
+  IN_RECOVERY     // Recovery action sent, waiting
+  RECOVERED       // Payment received
+  ABANDONED       // Gave up / stopping rule hit
+  PROMISE_TO_PAY  // Customer promised to pay on a date
+}
+
+enum FailureType {
+  PAYMENT_FAILED        // payment.failed webhook
+  CHECKOUT_ABANDONED    // User dropped off at checkout
+  SUBSCRIPTION_FAILED   // subscription.charged.failed
+  INVOICE_OVERDUE       // B2B invoice past due date
+  MANDATE_FAILED        // Auto-debit mandate failed
+}
+
+enum ActionType {
+  IMMEDIATE_RETRY_LINK    // Generate a new payment link immediately
+  DELAYED_RETRY_LINK      // Schedule a retry link for later
+  DISCOUNT_OFFER          // Send payment link with discount
+  B2B_REMINDER_EMAIL      // Polite B2B invoice reminder
+  B2B_FIRM_EMAIL          // Firm follow-up email
+  B2B_ESCALATION_EMAIL    // Escalate to senior contact
+  HINGLISH_VOICE_CALL     // TTS voice message in Hinglish
+  MANDATE_RETRY           // Retry a failed auto-debit mandate
+  PROMISE_TO_PAY_FOLLOWUP // Follow up on a promise-to-pay
+  NO_ACTION               // AI decided not to act (e.g., suspected fraud)
+}
+
+enum ActionStatus {
+  PENDING
+  SCHEDULED
+  EXECUTING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
