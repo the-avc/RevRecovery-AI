@@ -1,19 +1,20 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from typing import Optional
 
 from agents.hinglish_voice import generate_hinglish_audio, AUDIO_OUTPUT_DIR
 
 router = APIRouter()
 
- 
+
 class VoiceRequest(BaseModel):
     customerName: str
     amount: float
 
 
 class VoiceResponse(BaseModel):
-    audioPath: str | None
+    audioPath: Optional[str]
     success: bool
 
 

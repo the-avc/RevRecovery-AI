@@ -62,4 +62,3 @@ export function verifyWebhookSignature(body: string | Buffer, signature: string,
   const actual = Buffer.from(signature, "hex");
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
-

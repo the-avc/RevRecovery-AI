@@ -189,7 +189,7 @@ async def analyze_transaction(
     The LLM is a second opinion layer, not the primary decision maker.
     Output is always sanitized so downstream code sees a valid contract.
     """
-    error_code = (transaction_context or {}).get("error_code") or "UNKNOWN"
+    error_code = transaction_context.get("error_code") or "UNKNOWN"
     if not os.getenv("GEMINI_API_KEY"):
         return _fallback(math_model_action, recovery_probability, error_code)
 

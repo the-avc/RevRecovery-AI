@@ -79,6 +79,18 @@ export interface BatchResult {
   batchId: string;
 }
 
+export interface BatchRun {
+  id: string;
+  totalAtRisk: number;
+  totalRecovered: number;
+  transactionCount: number;
+  recoveredCount: number;
+  startedAt: string;
+  completedAt?: string;
+  status: string;
+  actualRecovered: number;
+}
+
 // Dashboard
 export const getStats = () => api.get<DashboardStats>('/dashboard/stats').then(r => r.data);
 
@@ -98,6 +110,9 @@ export const getAuditLogs = (params?: { page?: number; transactionId?: string })
 // Agent
 export const runBatchRecovery = () =>
   api.post<BatchResult>('/agent/run-batch').then(r => r.data);
+
+export const getBatches = () =>
+  api.get<BatchRun[]>('/agent/batches').then(r => r.data);
 
 // Seed
 export const generateMockData = (count = 50) =>

@@ -95,7 +95,7 @@ export async function extractPromiseToPay(
       { timeout: 15000 },
     );
     return {
-      promisedDate: data.promisedDate ?? data.promised_date ?? null,
+      promisedDate: data.promisedDate ?? null,
       confidence: data.confidence ?? 0,
     };
   } catch {
@@ -114,7 +114,7 @@ export async function generateHinglishVoice(
       { customerName, amount },
       { timeout: 30000 },
     );
-    return { audioPath: data.audioPath ?? data.audio_path ?? null };
+    return { audioPath: data.audioPath ?? null };
   } catch {
     return { audioPath: null };
   }

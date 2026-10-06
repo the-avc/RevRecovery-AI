@@ -11,8 +11,6 @@ interface KPICardProps {
   icon: React.ComponentType<any>;
   color: string;
   delay?: number;
-  isPercent?: boolean;
-  isCurrency?: boolean;
 }
 
 export default function KPICard({
@@ -23,8 +21,6 @@ export default function KPICard({
   icon: Icon,
   color,
   delay = 0,
-  isPercent = false,
-  isCurrency = false,
 }: KPICardProps) {
   // For CountUp: strip currency symbols and parse numeric value
   const numericValue = rawValue;
@@ -36,7 +32,7 @@ export default function KPICard({
     >
       <div className="flex justify-between items-start">
         <div className="flex-1 min-w-0">
-          <div className="text-[11px] text-[#8b8baf] font-semibold uppercase tracking-widest mb-3">
+          <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-widest mb-3">
             {label}
           </div>
           <div
@@ -51,7 +47,7 @@ export default function KPICard({
             />
           </div>
           {subtitle && (
-            <div className="text-xs text-[#8b8baf] mt-2 leading-relaxed">{subtitle}</div>
+            <div className="text-xs text-text-secondary mt-2 leading-relaxed">{subtitle}</div>
           )}
         </div>
         <div

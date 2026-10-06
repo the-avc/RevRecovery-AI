@@ -10,8 +10,14 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // Node orchestrator (Express on 4000)
       '/api': {
         target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
+      // Python AI engine (FastAPI on 8000) — audio files + health
+      '/audio': {
+        target: 'http://localhost:8000',
         changeOrigin: true,
       },
     },

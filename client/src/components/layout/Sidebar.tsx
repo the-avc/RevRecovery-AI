@@ -51,7 +51,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         {/* Close button (mobile only) */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 lg:hidden p-1.5 rounded-lg text-[#8b8baf] hover:text-white hover:bg-violet-500/10 transition-colors z-10"
+          className="absolute top-4 right-4 lg:hidden p-1.5 rounded-lg text-text-secondary hover:text-white hover:bg-violet-500/10 transition-colors z-10"
         >
           <X size={18} />
         </button>
@@ -61,7 +61,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           {/* Logo */}
           <div className="mb-10 pl-1">
             <div className="flex items-center gap-3 mb-0.5">
-              <div className="w-10 h-10 bg-gradient-to-br from-violet-600 to-pink-500 rounded-xl flex items-center justify-center shadow-lg shadow-violet-500/30">
+              <div className="w-10 h-10 bg-linear-to-br from-violet-600 to-pink-500 rounded-xl flex items-center justify-center shadow-lg shadow-violet-500/30">
                 <Zap size={20} className="text-white fill-white" />
               </div>
               <div>
@@ -75,7 +75,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
           {/* Nav */}
           <nav className="flex flex-col gap-1 flex-1">
-            <div className="text-[10px] text-[#8b8baf] uppercase tracking-widest px-3 mb-3 font-semibold">
+            <div className="text-[10px] text-text-secondary uppercase tracking-widest px-3 mb-3 font-semibold">
               Navigation
             </div>
             {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
@@ -88,7 +88,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                   `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
                     isActive
                       ? 'text-violet-300 bg-violet-500/20 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.25)]'
-                      : 'text-[#8b8baf] hover:text-[#f0f0ff] hover:bg-violet-500/10'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-violet-500/10'
                   }`
                 }
               >
@@ -113,8 +113,8 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
               <Activity size={13} className="text-violet-400" />
               <span className="text-xs text-violet-300 font-semibold">AI Engine Active</span>
             </div>
-            <div className="text-[11px] text-[#8b8baf] leading-relaxed">
-              Gemini 1.5 Flash + Math Model
+            <div className="text-[11px] text-text-secondary leading-relaxed">
+              Gemini 2.5 Flash + Math Model
             </div>
           </div>
         </div>

@@ -182,4 +182,3 @@ export async function downloadGeneratedCSV(_req: Request, res: Response): Promis
     res.status(500).json({ error: "Failed to download CSV", details: err?.message });
   }
 }
-

@@ -86,4 +86,3 @@ export const verifyPayment = async (req: Request, res: Response): Promise<void> 
     res.status(500).json({ success: false, error: "Failed to verify payment", details: String(error) });
   }
 };
-

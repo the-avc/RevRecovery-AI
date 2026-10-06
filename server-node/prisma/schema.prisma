@@ -81,7 +81,7 @@ model RecoveryAction {
   paymentLinkUrl  String?         // Generated Razorpay link
   paymentLinkId   String?         // Razorpay link ID for tracking
   emailSentAt     DateTime?
-  smsSentAt       DateTime?
+  smsSentAt       DateTime?         // Reserved: future direct SMS integration (Razorpay notifies via payment link today)
   voiceCallAt     DateTime?
   voiceAudioPath  String?         // Path to Hinglish TTS audio file
   
