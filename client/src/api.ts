@@ -141,3 +141,19 @@ export const createRazorpayOrder = (data: { amount: number; transactionId?: stri
 
 export const verifyRazorpayPayment = (data: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string; transactionId?: string }) =>
   api.post<{ success: boolean; message: string }>('/payment/verify-payment', data).then(r => r.data);
+
+// Promise to Pay
+export interface PromiseResult {
+  success: boolean;
+  promisedDate: string | null;
+  confidence: number;
+  rawMention?: string | null;
+  status: string;
+  message: string;
+}
+
+export const recordPromiseToPay = (id: string, message: string) =>
+  api.post<PromiseResult>(`/dashboard/transactions/${id}/promise`, { message }).then(r => r.data);
+
+export const triggerSingleRecovery = (id: string) =>
+  api.post<{ success: boolean; transaction: Transaction }>(`/dashboard/transactions/${id}/recover`).then(r => r.data);

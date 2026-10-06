@@ -87,7 +87,7 @@ function fallback(c: FailedTransactionContext): AIDecision {
 /** Extracts a promise-to-pay date from a customer reply via Python NLP. */
 export async function extractPromiseToPay(
   customerMessage: string,
-): Promise<{ promisedDate: string | null; confidence: number }> {
+): Promise<{ promisedDate: string | null; confidence: number; rawMention?: string | null }> {
   try {
     const { data } = await axios.post(
       `${PYTHON_ENGINE_URL}/extract-promise`,
@@ -97,9 +97,10 @@ export async function extractPromiseToPay(
     return {
       promisedDate: data.promisedDate ?? null,
       confidence: data.confidence ?? 0,
+      rawMention: data.rawMention ?? null,
     };
   } catch {
-    return { promisedDate: null, confidence: 0 };
+    return { promisedDate: null, confidence: 0, rawMention: null };
   }
 }
 

@@ -1,5 +1,8 @@
 import { Request, Response } from "express";
 import { prisma } from "../services/db";
+import { extractPromiseToPay } from "../services/python-bridge";
+import { executeRecovery } from "../services/recovery-engine";
+import { log } from "../services/audit.service";
 
 /** GET /api/dashboard/stats — totals, recovery rate, breakdowns, recent recoveries */
 export async function getStats(_req: Request, res: Response): Promise<void> {
@@ -78,5 +81,114 @@ export async function getTransactionDetail(req: Request, res: Response): Promise
     res.json(transaction);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch transaction", details: String(error) });
+  }
+}
+
+/** POST /api/dashboard/transactions/:id/promise — Extracts promise-to-pay date from message & schedules follow-up */
+export async function recordPromiseToPay(req: Request, res: Response): Promise<void> {
+  try {
+    const id = req.params.id as string;
+    const { message } = req.body;
+    if (!message || typeof message !== "string" || !message.trim()) {
+      res.status(400).json({ success: false, error: "A non-empty customer message string is required." });
+      return;
+    }
+
+    const txn = await prisma.transaction.findUnique({
+      where: { id },
+      include: { customer: true },
+    });
+    if (!txn) {
+      res.status(404).json({ success: false, error: "Transaction not found." });
+      return;
+    }
+
+    // Call Python NLP bridge
+    const result = await extractPromiseToPay(message.trim());
+
+    if (result.promisedDate) {
+      const parsedDate = new Date(result.promisedDate);
+
+      // Update transaction status and promise date
+      const updated = await prisma.transaction.update({
+        where: { id },
+        data: {
+          status: "PROMISE_TO_PAY",
+          promisedPayDate: parsedDate,
+        },
+      });
+
+      // Create a scheduled follow-up action
+      await prisma.recoveryAction.create({
+        data: {
+          transactionId: id,
+          actionType: "PROMISE_TO_PAY_FOLLOWUP",
+          status: "SCHEDULED",
+          scheduledFor: parsedDate,
+          aiRootCause: "Customer provided promise-to-pay date",
+          aiReasoning: `Customer message: "${message.trim()}". AI extracted target pay date ${result.promisedDate} (${(result.confidence * 100).toFixed(0)}% confidence). Follow-up scheduled upon expiry.`,
+          aiConfidence: result.confidence,
+          recoveryProb: Math.min(0.9, result.confidence || 0.7),
+        },
+      });
+
+      await log(
+        "PROMISE_TO_PAY_RECORDED",
+        "USER",
+        {
+          customerMessage: message.trim(),
+          promisedDate: result.promisedDate,
+          confidence: result.confidence,
+          rawMention: result.rawMention,
+        },
+        id,
+      );
+
+      res.json({
+        success: true,
+        promisedDate: result.promisedDate,
+        confidence: result.confidence,
+        rawMention: result.rawMention,
+        status: updated.status,
+        message: `Promise-to-pay recorded for ${result.promisedDate}`,
+      });
+    } else {
+      await log(
+        "CUSTOMER_MESSAGE_UNRECOGNIZED",
+        "USER",
+        { customerMessage: message.trim(), reason: "No clear payment date identified" },
+        id,
+      );
+      res.json({
+        success: false,
+        promisedDate: null,
+        confidence: result.confidence,
+        rawMention: null,
+        status: txn.status,
+        message: "No specific date or commitment window detected in the customer message.",
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Failed to process customer promise", details: String(error) });
+  }
+}
+
+/** POST /api/dashboard/transactions/:id/recover — Triggers AI recovery on a single transaction */
+export async function retryRecovery(req: Request, res: Response): Promise<void> {
+  try {
+    const id = req.params.id as string;
+    const txn = await prisma.transaction.findUnique({ where: { id } });
+    if (!txn) {
+      res.status(404).json({ success: false, error: "Transaction not found." });
+      return;
+    }
+    await executeRecovery(id);
+    const updated = await prisma.transaction.findUnique({
+      where: { id },
+      include: { customer: true, recoveryActions: { orderBy: { createdAt: "desc" }, take: 1 } },
+    });
+    res.json({ success: true, transaction: updated });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Recovery failed", details: String(error) });
   }
 }

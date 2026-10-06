@@ -1,6 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { getTransactionDetail } from "../api";
+import {
+  getTransactionDetail,
+  recordPromiseToPay,
+  triggerSingleRecovery,
+} from "../api";
 import type { Transaction } from "../api";
 import { format } from "date-fns";
 import {
@@ -10,6 +14,15 @@ import {
   Brain,
   User,
   DollarSign,
+  Calendar,
+  Sparkles,
+  Send,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  RefreshCw,
+  Handshake,
+  ShieldCheck,
 } from "lucide-react";
 import { ACTION_LABELS, cardBase } from "../constants";
 import { StatusBadge } from "../components/ui/Badge";
@@ -21,12 +34,30 @@ export default function TransactionDetailPage() {
   const [txn, setTxn] = useState<Transaction | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  // Promise-to-Pay state
+  const [promiseMessage, setPromiseMessage] = useState("");
+  const [promiseLoading, setPromiseLoading] = useState(false);
+  const [promiseResult, setPromiseResult] = useState<{
+    success: boolean;
+    text: string;
+    date?: string | null;
+    confidence?: number;
+    rawMention?: string | null;
+  } | null>(null);
+
+  // Single recovery trigger state
+  const [recovering, setRecovering] = useState(false);
+
+  const fetchDetail = useCallback(() => {
     if (!id) return;
     getTransactionDetail(id)
       .then(setTxn)
       .finally(() => setLoading(false));
   }, [id]);
+
+  useEffect(() => {
+    fetchDetail();
+  }, [fetchDetail]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat("en-IN", {
@@ -34,6 +65,57 @@ export default function TransactionDetailPage() {
       currency: "INR",
       maximumFractionDigits: 0,
     }).format(n);
+
+  const handleRecordPromise = async (overrideMessage?: string) => {
+    const text = (overrideMessage || promiseMessage).trim();
+    if (!text || !id) return;
+    setPromiseLoading(true);
+    setPromiseResult(null);
+
+    try {
+      const res = await recordPromiseToPay(id, text);
+      if (res.success && res.promisedDate) {
+        setPromiseResult({
+          success: true,
+          text: `Promise-to-pay recorded for ${format(new Date(res.promisedDate), "EEEE, MMMM d, yyyy")}`,
+          date: res.promisedDate,
+          confidence: res.confidence,
+          rawMention: res.rawMention,
+        });
+        setPromiseMessage("");
+        fetchDetail();
+      } else {
+        setPromiseResult({
+          success: false,
+          text:
+            res.message ||
+            "Could not identify a clear payment date from the message. Try specifying a day (e.g. 'this Friday') or date.",
+        });
+      }
+    } catch (err: any) {
+      setPromiseResult({
+        success: false,
+        text:
+          err?.response?.data?.error ||
+          "Failed to record promise-to-pay. Make sure the Node and Python servers are running.",
+      });
+    } finally {
+      setPromiseLoading(false);
+    }
+  };
+
+  const handleRunRecovery = async () => {
+    if (!id) return;
+    setRecovering(true);
+    try {
+      await triggerSingleRecovery(id);
+      fetchDetail();
+    } catch (err) {
+      console.error("Single recovery trigger failed:", err);
+    } finally {
+      setRecovering(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -60,10 +142,10 @@ export default function TransactionDetailPage() {
 
   return (
     <div className="px-6 sm:px-8 lg:px-10 py-8 max-w-4xl mx-auto">
-      {/* Back */}
+      {/* Back button */}
       <button
         onClick={() => navigate("/transactions")}
-        className="flex items-center gap-2 text-text-secondary text-sm mb-6 hover:text-text-primary transition-colors group"
+        className="flex items-center gap-2 text-text-secondary text-sm mb-6 hover:text-text-primary transition-colors group cursor-pointer"
       >
         <ArrowLeft
           size={15}
@@ -82,7 +164,24 @@ export default function TransactionDetailPage() {
             ID: {txn.id}
           </div>
         </div>
-        <StatusBadge status={txn.status} className="self-start" />
+        <div className="flex flex-wrap items-center gap-3">
+          <StatusBadge status={txn.status} />
+          {/* Action triggers */}
+          {txn.status !== "RECOVERED" && (
+            <button
+              onClick={handleRunRecovery}
+              disabled={recovering}
+              className="flex items-center gap-1.5 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-300 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+              title="Run or re-evaluate AI recovery workflow for this transaction"
+            >
+              <RefreshCw
+                size={13}
+                className={recovering ? "animate-spin" : ""}
+              />
+              <span>{recovering ? "Diagnosing..." : "Run AI Diagnosis"}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Info cards — responsive 2-col */}
@@ -146,14 +245,14 @@ export default function TransactionDetailPage() {
               <div className="flex justify-between items-center">
                 <span className="text-text-secondary text-sm">Retry Count</span>
                 <span className="font-semibold text-amber-400">
-                  {txn.retryCount}
+                  {txn.retryCount} / 3
                 </span>
               </div>
             )}
             <div className="flex justify-between items-center pt-2 border-t border-violet-500/10">
               <span className="text-text-secondary text-sm">Error Code</span>
               <code className="text-[13px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded">
-                {txn.errorCode}
+                {txn.errorCode || "N/A"}
               </code>
             </div>
             {txn.errorDescription && (
@@ -253,7 +352,7 @@ export default function TransactionDetailPage() {
                 </div>
                 <button
                   onClick={() => navigate(`/pay/${txn.id}`)}
-                  className="bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-emerald-600 transition-colors shadow-sm self-start sm:self-auto"
+                  className="bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-emerald-600 transition-colors shadow-sm self-start sm:self-auto cursor-pointer"
                 >
                   Simulate Payment
                 </button>
@@ -290,12 +389,171 @@ export default function TransactionDetailPage() {
         </div>
       )}
 
+      {/* PROMISE-TO-PAY TRACKER CARD (Problem Statement Requirement) */}
+      <div className={`${cardBase} p-6 mb-6 border-blue-500/30`}>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 bg-blue-500/15 rounded-xl flex items-center justify-center">
+              <Handshake size={18} className="text-blue-400" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-text-primary">
+                Promise-to-Pay Tracker
+              </h3>
+              <p className="text-xs text-text-secondary">
+                NLP extraction from customer replies + automated follow-up
+                sequencer
+              </p>
+            </div>
+          </div>
+          {txn.promisedPayDate && (
+            <span className="px-3 py-1 bg-blue-500/15 border border-blue-500/30 text-blue-300 text-xs font-semibold rounded-full flex items-center gap-1.5 self-start sm:self-auto">
+              <Calendar size={13} />
+              Promised: {format(new Date(txn.promisedPayDate), "MMM d, yyyy")}
+            </span>
+          )}
+        </div>
+
+        {/* Active Promise Notice if currently promised */}
+        {txn.promisedPayDate && (
+          <div className="p-4 mb-4 bg-blue-500/10 rounded-xl border border-blue-500/20 flex items-start gap-3">
+            <Calendar size={18} className="text-blue-400 shrink-0 mt-0.5" />
+            <div className="text-xs leading-relaxed">
+              <div className="font-semibold text-blue-300 mb-0.5">
+                Outreach Paused — Promise Active
+              </div>
+              <span className="text-text-secondary">
+                Target settlement date is{" "}
+                <strong className="text-text-primary">
+                  {format(new Date(txn.promisedPayDate), "EEEE, MMMM d, yyyy")}
+                </strong>
+                . Stopping rule: Customer will not be spammed. The hourly retry
+                sequencer will resume recovery automatically if payment is
+                unsettled after this date.
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Interactive customer message input */}
+        <div className="space-y-3">
+          <label className="block text-xs font-semibold text-text-secondary uppercase tracking-wider">
+            Record Customer Reply / Promise
+          </label>
+          <div className="relative">
+            <textarea
+              rows={2}
+              value={promiseMessage}
+              onChange={(e) => setPromiseMessage(e.target.value)}
+              placeholder="e.g. 'I will pay this Friday', 'End of month pakka', '5 tarikh ko salary aayegi tab payment karunga'..."
+              className="w-full bg-[#070714] border border-violet-500/20 focus:border-blue-500 text-text-primary rounded-xl px-4 py-3 text-sm outline-none transition-colors resize-none placeholder:text-text-secondary/50 font-sans"
+            />
+          </div>
+
+          {/* Quick template chips */}
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <span className="text-[11px] text-text-secondary">Try preset:</span>
+            {[
+              "Will pay this Friday",
+              "Salary on 1st, will clear then",
+              "Travelling right now, please give me 3 days",
+              "End of month pakka",
+            ].map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => {
+                  setPromiseMessage(preset);
+                  handleRecordPromise(preset);
+                }}
+                disabled={promiseLoading}
+                className="text-[11px] bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/20 px-2.5 py-1 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+              >
+                ⚡ {preset}
+              </button>
+            ))}
+          </div>
+
+          {/* Action button */}
+          <div className="flex items-center justify-between pt-2">
+            <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
+              <Sparkles size={12} className="text-violet-400" />
+              <span>Parsed via Gemini 2.5 Flash NLP + deterministic safety fallback</span>
+            </div>
+            <button
+              onClick={() => handleRecordPromise()}
+              disabled={promiseLoading || !promiseMessage.trim()}
+              className="flex items-center gap-2 bg-linear-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-600/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {promiseLoading ? (
+                <>
+                  <RefreshCw size={13} className="animate-spin" />
+                  <span>Extracting date...</span>
+                </>
+              ) : (
+                <>
+                  <Send size={13} />
+                  <span>Extract & Record Date</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Feedback banner */}
+          {promiseResult && (
+            <div
+              className={`p-4 rounded-xl border mt-3 text-xs flex items-start gap-3 animate-slide-up ${
+                promiseResult.success
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                  : "bg-amber-500/10 border-amber-500/30 text-amber-300"
+              }`}
+            >
+              {promiseResult.success ? (
+                <CheckCircle2 size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <div className="font-semibold mb-0.5">{promiseResult.text}</div>
+                {promiseResult.success && (
+                  <div className="flex flex-wrap gap-4 mt-2 text-[11px] text-text-secondary font-mono">
+                    <span>
+                      Confidence:{" "}
+                      <strong className="text-emerald-400">
+                        {((promiseResult.confidence || 0) * 100).toFixed(0)}%
+                      </strong>
+                    </span>
+                    {promiseResult.rawMention && (
+                      <span>
+                        Mention:{" "}
+                        <strong className="text-text-primary">
+                          "{promiseResult.rawMention}"
+                        </strong>
+                      </span>
+                    )}
+                    <span>
+                      Status:{" "}
+                      <strong className="text-blue-400">PROMISE_TO_PAY</strong>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Audit Trail timeline */}
       {(txn.auditLogs?.length || 0) > 0 && (
         <Card>
-          <h3 className="font-bold mb-6 text-base text-text-primary">
-            Audit Trail
-          </h3>
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-bold text-base text-text-primary">
+              Audit Trail
+            </h3>
+            <span className="text-xs text-text-secondary font-mono">
+              {txn.auditLogs!.length} events recorded
+            </span>
+          </div>
           <div className="flex flex-col gap-0">
             {txn.auditLogs!.map((log, i) => (
               <div key={log.id} className="flex gap-4 pb-6 relative">
@@ -308,14 +566,18 @@ export default function TransactionDetailPage() {
                       ? "bg-violet-500/20 border-violet-400"
                       : log.actor === "RAZORPAY_WEBHOOK"
                         ? "bg-amber-500/20 border-amber-400"
-                        : "bg-emerald-500/20 border-emerald-400"
+                        : log.actor === "CRON_JOB"
+                          ? "bg-blue-500/20 border-blue-400"
+                          : "bg-emerald-500/20 border-emerald-400"
                   }`}
                 >
                   {log.actor === "AI_AGENT"
                     ? "🧠"
                     : log.actor === "RAZORPAY_WEBHOOK"
                       ? "🔔"
-                      : "⚙️"}
+                      : log.actor === "CRON_JOB"
+                        ? "⏰"
+                        : "👤"}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center mb-1">
@@ -341,3 +603,4 @@ export default function TransactionDetailPage() {
     </div>
   );
 }
+

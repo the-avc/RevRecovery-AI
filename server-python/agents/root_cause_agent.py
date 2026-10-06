@@ -216,15 +216,86 @@ Analyze and respond ONLY with the JSON object."""
         return _fallback(math_model_action, recovery_probability, error_code)
 
 
+def _deterministic_extract_promise(customer_message: str) -> dict:
+    """Fallback rule-based extraction for relative dates when Gemini is unavailable."""
+    import calendar
+    from datetime import timedelta
+    text = customer_message.lower().strip()
+    today = date.today()
+
+    # 1. ISO date YYYY-MM-DD
+    m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
+    if m:
+        try:
+            d = date.fromisoformat(m.group(1))
+            return {"promised_date": d.isoformat(), "confidence": 0.9, "raw_mention": m.group(1)}
+        except ValueError:
+            pass
+
+    # 2. "tomorrow" / "kal"
+    if re.search(r"\b(tomorrow|kal)\b", text):
+        return {"promised_date": (today + timedelta(days=1)).isoformat(), "confidence": 0.85, "raw_mention": "tomorrow"}
+
+    # 3. "day after tomorrow" / "parso"
+    if re.search(r"\b(day after tomorrow|parso)\b", text):
+        return {"promised_date": (today + timedelta(days=2)).isoformat(), "confidence": 0.85, "raw_mention": "day after tomorrow"}
+
+    # 4. "in X days" / "X din"
+    m = re.search(r"\b(?:in\s+)?(\d+)\s*(?:days?|din)\b", text)
+    if m:
+        days = max(1, int(m.group(1)))
+        return {"promised_date": (today + timedelta(days=days)).isoformat(), "confidence": 0.8, "raw_mention": m.group(0)}
+
+    # 5. "end of month" / "month end"
+    if re.search(r"\b(?:end of (?:this )?month|month[- ]end)\b", text):
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        target = date(today.year, today.month, last_day)
+        return {"promised_date": target.isoformat(), "confidence": 0.8, "raw_mention": "end of month"}
+
+    # 6. Specific weekdays
+    weekdays = {
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6,
+        "somwar": 0, "mangalwar": 1, "budhwar": 2, "guruwar": 3,
+        "shukrawar": 4, "shaniwar": 5, "raviwar": 6,
+    }
+    for day_name, day_idx in weekdays.items():
+        if re.search(rf"\b(?:next\s+|this\s+)?{day_name}\b", text):
+            days_ahead = (day_idx - today.weekday()) % 7
+            if days_ahead == 0:
+                days_ahead = 7
+            return {
+                "promised_date": (today + timedelta(days=days_ahead)).isoformat(),
+                "confidence": 0.85,
+                "raw_mention": day_name,
+            }
+
+    # 7. Day of month e.g. "1st", "5th", "10 tarikh"
+    m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th|\s*tarikh)\b", text)
+    if m:
+        target_day = int(m.group(1))
+        if 1 <= target_day <= 31:
+            try:
+                target_date = date(today.year, today.month, min(target_day, calendar.monthrange(today.year, today.month)[1]))
+                if target_date < today:
+                    m_next = today.month + 1 if today.month < 12 else 1
+                    y_next = today.year if today.month < 12 else today.year + 1
+                    target_date = date(y_next, m_next, min(target_day, calendar.monthrange(y_next, m_next)[1]))
+                return {"promised_date": target_date.isoformat(), "confidence": 0.8, "raw_mention": m.group(0)}
+            except ValueError:
+                pass
+
+    return {"promised_date": None, "confidence": 0.0, "raw_mention": None}
+
+
 async def extract_promise_to_pay(customer_message: str) -> dict:
     """
     Extracts a promise-to-pay date from a customer's natural language reply.
     Example: "I'll pay on Friday" → { "promised_date": "2024-01-26", "confidence": 0.9 }
-    Returns past dates as-is with low confidence so the caller can decide;
-    never invents a date when none is mentioned.
+    Uses Gemini when API key is set; falls back to deterministic NLP.
     """
     if not os.getenv("GEMINI_API_KEY"):
-        return {"promised_date": None, "confidence": 0.0, "raw_mention": None}
+        return _deterministic_extract_promise(customer_message)
 
     prompt = f"""Extract a promise-to-pay date from this customer message. Today is {date.today()} (YYYY-MM-DD).
 
@@ -251,7 +322,6 @@ Respond ONLY with JSON:
         promised = parsed.get("promised_date")
         if promised is not None:
             promised = str(promised).strip() or None
-            # Validate ISO format; reject garbage like "soon" or "Friday".
             if promised is not None:
                 try:
                     date.fromisoformat(promised)
@@ -270,5 +340,7 @@ Respond ONLY with JSON:
             "confidence": max(0.0, min(0.95, confidence)),
             "raw_mention": raw,
         }
-    except Exception:
-        return {"promised_date": None, "confidence": 0.0, "raw_mention": None}
+    except Exception as e:
+        print(f"[Gemini] Promise extraction failed: {e}, falling back to deterministic parser")
+        return _deterministic_extract_promise(customer_message)
+
