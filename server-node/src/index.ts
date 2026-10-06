@@ -13,8 +13,8 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Raw body parser for Razorpay webhook signature verification
-app.use('/api/webhooks', express.raw({ type: 'application/json' }));
+// Raw body parser for Razorpay webhook signature verification (accepts all content types)
+app.use('/api/webhooks', express.raw({ type: '*/*' }));
 
 // JSON parser for all other routes
 app.use(express.json());

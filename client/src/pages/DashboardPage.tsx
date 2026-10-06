@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   TrendingUp, AlertTriangle, Zap, Clock,
-  Play, Database, RefreshCw,
+  Play, Database, RefreshCw, Download,
 } from 'lucide-react';
-import { getStats, runBatchRecovery, generateMockData } from '../api';
+import { getStats, runBatchRecovery, generateMockData, downloadCSV } from '../api';
 import type { DashboardStats } from '../api';
 import { FAILURE_COLORS, FAILURE_LABELS, btnPrimary, btnGhost } from '../constants';
 
@@ -47,7 +47,9 @@ export default function DashboardPage() {
     setSeeding(true);
     try {
       const result = await generateMockData(50);
-      setLastResult(`✅ Generated ${result.created || 50} mock transactions. Click "Run AI Recovery" to process them.`);
+      setLastResult(
+        `✅ Generated ${result.created || 50} mock transactions and saved to CSV. Click "Download CSV" to view the raw dataset.`
+      );
       await fetchStats();
     } catch {
       setLastResult('❌ Seeding failed. Make sure Node server is running.');
@@ -123,6 +125,14 @@ export default function DashboardPage() {
                 {seeding ? 'Generating...' : 'Generate Data'}
               </button>
               <button
+                className={`${btnGhost} text-sm py-2.5 px-4 whitespace-nowrap`}
+                onClick={downloadCSV}
+                title="Download current/generated transactions as CSV"
+              >
+                <Download size={15} />
+                Download CSV
+              </button>
+              <button
                 className={`${btnPrimary} text-sm py-2.5 px-4 whitespace-nowrap ${!running ? 'animate-pulse-glow' : ''}`}
                 onClick={handleRunBatch}
                 disabled={running}
@@ -139,10 +149,18 @@ export default function DashboardPage() {
       <div className="px-6 sm:px-8 lg:px-10 pb-10 max-w-7xl mx-auto -mt-4">
         {/* Status message */}
         {lastResult && (
-          <div className="px-5 py-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl mb-6 text-sm text-emerald-400 animate-fade-in">
-            {lastResult}
+          <div className="px-5 py-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl mb-6 text-sm text-emerald-400 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+            <span>{lastResult}</span>
+            <button
+              onClick={downloadCSV}
+              className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 rounded-lg text-xs text-emerald-300 font-medium transition-all"
+            >
+              <Download size={13} />
+              Download CSV Now
+            </button>
           </div>
         )}
+
 
         {/* KPI Cards — responsive grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">

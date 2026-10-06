@@ -4,56 +4,45 @@ import { prisma } from "../services/db";
 import { log } from "../services/audit.service";
 
 /** POST /api/agent/run-batch — Triggers AI recovery on all pending failed transactions */
-export async function runBatch(req: Request, res: Response): Promise<void> {
+export async function runBatch(_req: Request, res: Response): Promise<void> {
   try {
     await log("BATCH_TRIGGERED", "USER", { source: "dashboard" });
     const result = await runBatchRecovery();
-    res.json({
-      success: true,
-      message: `Processed ${result.processed} transactions`,
-      ...result,
-    });
+    res.json({ success: true, message: `Processed ${result.processed} transactions`, ...result });
   } catch (error) {
     await log("BATCH_ERROR", "SYSTEM", { error: String(error) });
-    res
-      .status(500)
-      .json({ error: "Batch recovery failed", details: String(error) });
+    res.status(500).json({ error: "Batch recovery failed", details: String(error) });
   }
 }
 
-/** GET /api/agent/batches — Returns all batch runs with actual recovered amounts */
-export async function getBatches(req: Request, res: Response): Promise<void> {
+/** GET /api/agent/batches — last 20 runs with actual recovered sums (single query, no N+1) */
+export async function getBatches(_req: Request, res: Response): Promise<void> {
   try {
-    const batches = await prisma.recoveryBatch.findMany({
-      orderBy: { startedAt: "desc" },
-      take: 20,
+    const batches = await prisma.recoveryBatch.findMany({ orderBy: { startedAt: "desc" }, take: 20 });
+    if (!batches.length) {
+      res.json([]);
+      return;
+    }
+    const earliest = batches[batches.length - 1].startedAt;
+    // One aggregate for all recovered txns since the oldest batch; attribute in memory.
+    const recovered = await prisma.transaction.findMany({
+      where: { status: "RECOVERED", recoveredAt: { gte: earliest } },
+      select: { recoveredAmount: true, recoveredAt: true },
     });
-
-    const enriched = await Promise.all(
-      batches.map(async (batch) => {
-        const recovered = await prisma.transaction.aggregate({
-          where: {
-            status: "RECOVERED",
-            updatedAt: {
-              gte: batch.startedAt,
-              lte: batch.completedAt || new Date(),
-            },
-          },
-          _sum: { recoveredAmount: true },
-          _count: true,
-        });
+    res.json(
+      batches.map((b, i) => {
+        const nextBatchStart = i > 0 ? batches[i - 1].startedAt : new Date();
+        const inWindow = recovered.filter(
+          (t) => t.recoveredAt && t.recoveredAt >= b.startedAt && t.recoveredAt <= nextBatchStart,
+        );
         return {
-          ...batch,
-          actualRecovered: recovered._sum.recoveredAmount || 0,
-          recoveredCount: recovered._count,
+          ...b,
+          actualRecovered: inWindow.reduce((s, t) => s + (t.recoveredAmount || 0), 0),
+          recoveredCount: inWindow.length,
         };
       }),
     );
-
-    res.json(enriched);
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Failed to fetch batches", details: String(error) });
+    res.status(500).json({ error: "Failed to fetch batches", details: String(error) });
   }
 }

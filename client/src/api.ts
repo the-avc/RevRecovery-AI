@@ -101,7 +101,24 @@ export const runBatchRecovery = () =>
 
 // Seed
 export const generateMockData = (count = 50) =>
-  api.post('/seed/generate', null, { params: { count } }).then(r => r.data);
+  api.post<{
+    success: boolean;
+    message: string;
+    downloadUrl: string;
+    csvPath?: string;
+    created?: number;
+    breakdown?: Record<string, number>;
+  }>('/seed/generate', null, { params: { count } }).then(r => r.data);
+
+export const downloadCSV = () => {
+  const link = document.createElement('a');
+  link.href = '/api/seed/download-csv';
+  link.setAttribute('download', `generated_transactions_${Date.now()}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
 
 // Payment
 export const createRazorpayOrder = (data: { amount: number; transactionId?: string; receipt?: string }) =>

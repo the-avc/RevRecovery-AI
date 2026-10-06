@@ -16,9 +16,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Split origins, filter out empty strings (when env var is not set)
+# Split origins, filter empty, and fallback to local frontend/node ports if unset
 raw_origins = os.getenv("ALLOWED_ORIGINS", "")
-allowed_origins = [o for o in raw_origins.split(",") if o]
+allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()] or [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:4000",
+]
 
 app.add_middleware(
     CORSMiddleware,

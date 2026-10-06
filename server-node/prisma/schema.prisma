@@ -11,7 +11,7 @@ generator client {
 model Customer {
   id           String        @id @default(cuid())
   name         String
-  email        String
+  email        String        @unique
   phone        String?
   type         CustomerType  @default(B2C) // B2C = individual, B2B = business
   company      String?                      // For B2B customers

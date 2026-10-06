@@ -24,66 +24,42 @@ export interface PaymentLinkOptions {
 }
 
 /**
- * Generates a Razorpay Payment Link for recovery
- * This is the core Razorpay integration that actually creates a "re-try" link
+ * Generates a Razorpay Payment Link for recovery (mocked when keys are absent).
  */
-export async function generateRecoveryPaymentLink(
+export function generateRecoveryPaymentLink(
   opts: PaymentLinkOptions,
-): Promise<{
-  id: string;
-  short_url: string;
-  amount: number;
-}> {
+): Promise<{ id: string; short_url: string; amount: number }> {
   if (!process.env.RAZORPAY_KEY_ID) {
-    // Mock mode for development without keys
-    console.log(
-      `[MOCK] Would generate Razorpay payment link for ${opts.customerEmail} - ₹${opts.amount / 100}`,
-    );
-    return {
-      id: `mock_plink_${Date.now()}`,
-      short_url: `https://rzp.io/l/mock_${Date.now()}`,
-      amount: opts.amount,
-    };
+    const id = `mock_plink_${Date.now()}`; // MOCK mode for dev without keys
+    console.log(`[MOCK] Payment link for ${opts.customerEmail} - Rs.${opts.amount / 100}`);
+    return Promise.resolve({ id, short_url: `https://rzp.io/l/${id}`, amount: opts.amount });
   }
-
-  const linkData = {
-    amount: opts.amount,
-    currency: opts.currency || "INR",
-    accept_partial: false,
-    description: opts.description,
-    customer: {
-      name: opts.customerName,
-      email: opts.customerEmail,
-      contact: opts.customerPhone || "",
-    },
-    notify: {
-      sms: !!opts.customerPhone,
-      email: true,
-    },
-    reminder_enable: true,
-    expire_by: opts.expireBy || Math.floor(Date.now() / 1000) + 24 * 60 * 60,
-    reference_id: opts.referenceId,
-  };
-
-  const link = await razorpay.paymentLink.create(linkData as any);
-  return {
-    id: link.id as string,
-    short_url: link.short_url as string,
-    amount: link.amount as number,
-  };
+  return razorpay.paymentLink
+    .create({
+      amount: opts.amount,
+      currency: opts.currency || "INR",
+      accept_partial: false,
+      description: opts.description,
+      customer: {
+        name: opts.customerName,
+        email: opts.customerEmail,
+        ...(opts.customerPhone?.trim() ? { contact: opts.customerPhone.trim() } : {}),
+      },
+      notify: { sms: Boolean(opts.customerPhone?.trim()), email: true },
+      reminder_enable: true,
+      expire_by: opts.expireBy || Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+      reference_id: opts.referenceId,
+    } as never)
+    .then((link: any) => ({ id: link.id, short_url: link.short_url, amount: link.amount }));
 }
 
 /**
- * Verifies Razorpay webhook signature to ensure authenticity
+ * Verifies Razorpay webhook or payment signature (timing-safe).
  */
-export function verifyWebhookSignature(
-  body: string,
-  signature: string,
-  secret: string,
-): boolean {
-  const expectedSignature = crypto
-    .createHmac("sha256", secret)
-    .update(body)
-    .digest("hex");
-  return expectedSignature === signature;
+export function verifyWebhookSignature(body: string | Buffer, signature: string, secret: string): boolean {
+  if (!signature || !secret) return false;
+  const expected = crypto.createHmac("sha256", secret).update(body).digest();
+  const actual = Buffer.from(signature, "hex");
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
+

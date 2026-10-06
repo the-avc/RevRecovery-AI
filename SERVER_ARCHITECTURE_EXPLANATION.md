@@ -1,34 +1,56 @@
 # Revenue Recovery System: File-by-File Server Architecture & Data Flow Guide
 
-This document provides a comprehensive, file-by-file technical breakdown of how the Revenue Recovery backend works across both servers (**Node.js Orchestrator** on port 4000 and **Python AI Microservice** on port 8000).
+This document is an exhaustive, technical deep-dive into the Revenue Recovery backend. It covers both servers (**Node.js Orchestrator** on port 4000 and **Python AI Microservice** on port 8000), tracing a concrete failed payment payload through every single file, explaining what each section and line of code does, why it exists, and how the data mutates across the lifecycle.
 
 ---
 
 ## Table of Contents
-1. [High-Level Architectural Topology](#1-high-level-architectural-topology)
-2. [End-to-End System Flow Diagram](#2-end-to-end-system-flow-diagram)
-3. [How Data Enters the System (Ingestion)](#3-how-data-enters-the-system-ingestion)
-4. [File-by-File Explanation: `server-node`](#4-file-by-file-explanation-server-node)
-   - [Core & Entrypoints](#core--entrypoints)
-   - [Routes Layer (`src/routes/`)](#routes-layer-srcroutes)
-   - [Controllers Layer (`src/controllers/`)](#controllers-layer-srccontrollers)
-   - [Services & Business Logic (`src/services/`)](#services--business-logic-srcservices)
-   - [Background Cron Jobs (`src/jobs/`)](#background-cron-jobs-srcjobs)
-   - [Database Schema (`prisma/schema.prisma`)](#database-schema-prismaschemaprisma)
-5. [File-by-File Explanation: `server-python`](#5-file-by-file-explanation-server-python)
-   - [Core & Entrypoint (`main.py`)](#core--entrypoint-mainpy)
-   - [API Routes Layer (`routes/`)](#api-routes-layer-routes)
-   - [Statistical & Decision Model (`models/recovery_probability.py`)](#statistical--decision-model-modelsrecovery_probabilitypy)
-   - [AI Agents & Synthesis (`agents/`)](#ai-agents--synthesis-agents)
-6. [Data Lifecycle & Where Results Go](#6-data-lifecycle--where-results-go)
-7. [The Stopping Rules (Safety & Compliance)](#7-the-stopping-rules-safety--compliance)
-8. [Quick Reference: Input -> Process -> Output Matrix](#8-quick-reference-input---process---output-matrix)
+
+1. [Two-Tier Architectural Paradigm](#1-two-tier-architectural-paradigm)
+2. [End-to-End Sequence Diagram](#2-end-to-end-sequence-diagram)
+3. [The Concrete Example Dataset](#3-the-concrete-example-dataset)
+4. [Step-by-Step Data Journey Through Every Server File](#4-step-by-step-data-journey-through-every-server-file)
+   - [Phase 1: Ingestion & Verification (`server-node`)](#phase-1-ingestion--verification-server-node)
+     - [`server-node/src/index.ts`](#server-nodesrcindexts)
+     - [`server-node/src/routes/webhook.routes.ts`](#server-nodesrcrouteswebhookroutests)
+     - [`server-node/src/services/razorpay.service.ts` (Webhook Verification)](#server-nodesrcservicesrazorpayservicets-webhook-verification)
+     - [`server-node/src/controllers/webhook.controller.ts`](#server-nodesrccontrollerswebhookcontrollerts)
+     - [`server-node/src/services/db.ts`](#server-nodesrcservicesdbts)
+     - [`server-node/prisma/schema.prisma`](#server-nodeprismaschemaprisma)
+     - [`server-node/src/services/audit.service.ts`](#server-nodesrcservicesauditservicets)
+   - [Phase 2: Orchestration & Python Bridge (`server-node`)](#phase-2-orchestration--python-bridge-server-node)
+     - [`server-node/src/services/recovery-engine.ts` (Part 1: Pre-flight & Dispatch)](#server-nodesrcservicesrecovery-enginets-part-1)
+     - [`server-node/src/services/python-bridge.ts`](#server-nodesrcservicespython-bridgets)
+   - [Phase 3: Cognitive Intelligence & Probability (`server-python`)](#phase-3-cognitive-intelligence--probability-server-python)
+     - [`server-python/main.py`](#server-pythonmainpy)
+     - [`server-python/routes/analyze.py`](#server-pythonroutesanalyzepy)
+     - [`server-python/models/recovery_probability.py`](#server-pythonmodelsrecovery_probabilitypy)
+     - [`server-python/agents/root_cause_agent.py`](#server-pythonagentsroot_cause_agentpy)
+     - [`server-python/routes/voice.py`](#server-pythonroutesvoicepy)
+     - [`server-python/agents/hinglish_voice.py`](#server-pythonagentshinglish_voicepy)
+     - [`server-python/routes/promise.py`](#server-pythonroutespromisepy)
+   - [Phase 4: Execution & Persistence (`server-node`)](#phase-4-execution--persistence-server-node)
+     - [`server-node/src/services/recovery-engine.ts` (Part 2: Link Generation & State Transition)](#server-nodesrcservicesrecovery-enginets-part-2)
+     - [`server-node/src/services/razorpay.service.ts` (Payment Link Creation)](#server-nodesrcservicesrazorpayservicets-payment-link-creation)
+   - [Phase 5: Background Cron Jobs & Re-engagement (`server-node`)](#phase-5-background-cron-jobs--re-engagement-server-node)
+     - [`server-node/src/jobs/retry-sequencer.ts`](#server-nodesrcjobsretry-sequencerts)
+   - [Phase 6: Frontend API & Interactive Recovery (`server-node`)](#phase-6-frontend-api--interactive-recovery-server-node)
+     - [`server-node/src/routes/dashboard.routes.ts`](#server-nodesrcroutesdashboardroutests)
+     - [`server-node/src/controllers/dashboard.controller.ts`](#server-nodesrccontrollersdashboardcontrollerts)
+     - [`server-node/src/routes/agent.routes.ts`](#server-nodesrcroutesagentroutests)
+     - [`server-node/src/controllers/agent.controller.ts`](#server-nodesrccontrollersagentcontrollerts)
+     - [`server-node/src/routes/seed.routes.ts`](#server-nodesrcroutesseedroutests)
+     - [`server-node/src/controllers/seed.controller.ts`](#server-nodesrccontrollersseedcontrollerts)
+     - [`server-node/src/routes/payment.routes.ts`](#server-nodesrcroutespaymentroutests)
+     - [`server-node/src/controllers/payment.controller.ts`](#server-nodesrccontrollerspaymentcontrollerts)
+5. [The 4 Enterprise Stopping Rules](#5-the-4-enterprise-stopping-rules)
+6. [Master Input -> File -> Output Reference Matrix](#6-master-input---file---output-reference-matrix)
 
 ---
 
-## 1. High-Level Architectural Topology
+## 1. Two-Tier Architectural Paradigm
 
-The system uses a **decoupled, two-tier server architecture**:
+The system separates **Orchestration & State Management** from **Cognitive Intelligence & Text-to-Speech**:
 
 ```
  ┌────────────────────────────────────────────────────────┐
@@ -56,443 +78,484 @@ The system uses a **decoupled, two-tier server architecture**:
  └────────────────────────────────────────────────────────┘
 ```
 
-- **`server-node` (Port 4000)** is the **Orchestrator**. It owns the database, exposes REST endpoints to the client, receives webhooks from payment gateways (Razorpay), enforces stopping rules, creates payment links, and manages audit trails.
-- **`server-python` (Port 8000)** is the **Intelligence Layer**. It does not touch the database directly. It receives sanitized transaction context from Node, calculates mathematical probabilities, runs Gemini 2.5 Flash for deep root-cause diagnosis and second-opinion validation, generates personalized Hinglish audio messages, and returns structured JSON back to Node.
+- **`server-node` (Port 4000)**: Owns data persistence, external payment gateway APIs (Razorpay), immutable audit logs, cron sequencers, and client delivery.
+- **`server-python` (Port 8000)**: Pure, stateless computational and AI microservice. Receives sanitized transaction JSON, scores probability mathematically, consults Google Gemini 2.5 Flash for deep root-cause diagnosis, synthesizes localized Hinglish audio, and returns structured decisions.
 
 ---
 
-## 2. End-to-End System Flow Diagram
+## 2. End-to-End Sequence Diagram
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Gateway as Razorpay / User / Mock Seed
-    participant NodeEntry as server-node (Express / Routes)
-    participant Ctrl as Webhook / Seed / Agent Controller
-    participant Engine as Recovery Engine (recovery-engine.ts)
-    participant PyBridge as python-bridge.ts
-    participant PyApp as server-python (FastAPI)
+    participant Gateway as Razorpay Gateway
+    participant NodeEntry as server-node (index.ts / routes)
+    participant Ctrl as webhook.controller.ts
+    participant DB as Supabase PostgreSQL (Prisma)
+    participant Engine as recovery-engine.ts
+    participant Bridge as python-bridge.ts
+    participant PyRouter as server-python (analyze.py)
     participant MathModel as recovery_probability.py
-    participant Gemini as root_cause_agent.py (Gemini 2.5 Flash)
-    participant Voice as hinglish_voice.py (gTTS)
+    participant Gemini as root_cause_agent.py (Gemini 2.5)
+    participant TTS as hinglish_voice.py (gTTS)
     participant RzpService as razorpay.service.ts
-    participant DB as PostgreSQL (Prisma)
-    participant Client as Frontend Dashboard
+    participant Cron as retry-sequencer.ts
 
-    Gateway->>NodeEntry: 1. Ingest Failed Payment / Seed / Webhook
-    NodeEntry->>Ctrl: 2. Route & Validate (HMAC signature if webhook)
-    Ctrl->>DB: 3. Upsert Customer & Create Transaction (Status: FAILED)
-    Ctrl->>Engine: 4. Trigger executeRecovery(transactionId)
-    
+    Gateway->>NodeEntry: POST /api/webhooks with HMAC signature header
+    NodeEntry->>Ctrl: Raw body buffer & signature routed to controller
+    Ctrl->>RzpService: verifyWebhookSignature(rawBody, signature, secret)
+    Ctrl-->>Gateway: 200 { received: true } (Immediate HTTP ACK < 100ms)
+    Ctrl->>DB: Upsert Customer & Create Transaction (status: FAILED)
+    Ctrl->>Engine: executeRecovery(transactionId)
+
     rect rgb(240, 248, 255)
-        Note over Engine,PyApp: AI Intelligence Sub-pipeline
-        Engine->>PyBridge: 5. getAIDecision(FailedTransactionContext)
-        PyBridge->>PyApp: 6. POST /analyze
-        PyApp->>MathModel: 7. compute_recovery_probability() & recommend_action()
-        MathModel-->>PyApp: 8. Math Score + Base Action
-        PyApp->>Gemini: 9. Prompt Gemini with transaction context + Math baseline
-        Gemini-->>PyApp: 10. Validated Action, Root Cause, Reasoning, Sentiment
-        PyApp-->>PyBridge: 11. Return AIDecision JSON
-        PyBridge-->>Engine: 12. Return aiDecision
+        Note over Engine,Gemini: AI Cognitive Sub-pipeline
+        Engine->>Bridge: getAIDecision(FailedTransactionContext)
+        Bridge->>PyRouter: POST /analyze
+        PyRouter->>MathModel: compute_recovery_probability() & recommend_action()
+        MathModel-->>PyRouter: Probability = 0.72, Action = HINGLISH_VOICE_CALL
+        PyRouter->>Gemini: analyze_transaction(context, mathAction, prob)
+        Gemini-->>PyRouter: { root_cause, reasoning, validated_action, sentiment, urgency }
+        PyRouter-->>Bridge: AIDecision JSON
+        Bridge-->>Engine: Structured aiDecision
     end
 
     rect rgb(255, 250, 240)
         Note over Engine,RzpService: Action Execution Sub-pipeline
-        alt Action requires payment link
-            Engine->>RzpService: 13. generateRecoveryPaymentLink(amount, discount, 48h TTL)
-            RzpService-->>Engine: 14. short_url (https://rzp.io/l/...)
-        end
-        alt Action is HINGLISH_VOICE_CALL
-            Engine->>PyBridge: 15. generateHinglishVoice(name, amount, link)
-            PyBridge->>PyApp: 16. POST /generate-voice
-            PyApp->>Voice: 17. Build Hindi script & gTTS .mp3
-            Voice-->>Engine: 18. audioPath
-        end
+        Engine->>RzpService: generateRecoveryPaymentLink(amount, 24h TTL)
+        RzpService-->>Engine: short_url (https://rzp.io/l/plink_123)
+        Engine->>Bridge: generateHinglishVoice(customerName, amount, link)
+        Bridge->>PyRouter: POST /generate-voice
+        PyRouter->>TTS: gTTS generation
+        TTS-->>Engine: Saved filepath audio_files/recovery_abc.mp3
     end
 
-    Engine->>DB: 19. Create RecoveryAction (PENDING / SCHEDULED / COMPLETED)
-    Engine->>DB: 20. Update Transaction (Status: IN_RECOVERY, retryCount + 1)
-    Engine->>DB: 21. Log Audit Event (AI_DECISION_MADE, RECOVERY_ACTION_EXECUTED)
-    
-    Client->>NodeEntry: 22. GET /api/dashboard/stats & /transactions
-    NodeEntry->>DB: 23. Query aggregate metrics & recent recovery actions
-    DB-->>Client: 24. Render metrics, action timeline, audio player & live logs
+    Engine->>DB: Create RecoveryAction (COMPLETED / SCHEDULED)
+    Engine->>DB: Update Transaction (status: IN_RECOVERY, retryCount: 1)
+    Engine->>DB: Log Audit Event (RECOVERY_ACTION_EXECUTED)
+
+    opt When customer pays via payment link
+        Gateway->>Ctrl: POST /api/webhooks (event: payment.captured)
+        Ctrl->>DB: Update Transaction (status: RECOVERED)
+        Ctrl->>DB: Update RecoveryAction (status: CANCELLED, stopping rule applied)
+    end
 ```
 
 ---
 
-## 3. How Data Enters the System (Ingestion)
+## 3. The Concrete Example Dataset
 
-Data enters the backend through **five distinct mechanisms**:
+Throughout this entire file-by-file walkthrough, we trace a concrete, real-world failed payment payload.
 
-1. **Razorpay Webhooks (`POST /api/webhooks/razorpay`)**:
-   - **File**: `server-node/src/controllers/webhook.controller.ts`
-   - Real-world production entrypoint. Razorpay notifies our server when an event happens:
-     - `payment.failed`: An attempted charge was declined by the bank, network dropped, or OTP timed out.
-     - `payment.captured` or `payment_link.paid`: A customer completed the payment (triggers stopping rules).
-     - `subscription.charged.failed`: Recurring card/mandate deduction failed.
-     - `invoice.expired`: A B2B invoice has exceeded its due date without payment.
+### The Input Dataset: High-Ticket Electronics Retail Failure
 
-2. **Synthetic Data Generator (`POST /api/seed/generate?count=50`)**:
-   - **File**: `server-node/src/controllers/seed.controller.ts`
-   - Generates realistic Indian customer profiles, B2B companies (Infosys, TCS, etc.), authentic failure reasons (`GATEWAY_ERROR`, `INSUFFICIENT_FUNDS`, `CHECKOUT_ABANDONED`, `INVOICE_EXPIRED`), overdue invoices, and cart items.
-   - Uses optimized bulk inserts (`prisma.customer.createMany` and `prisma.transaction.createMany`).
+- **Customer**: Rohan Sharma
+- **Email**: `rohan.sharma@gmail.com`
+- **Phone**: `+919876543210`
+- **Cart**: Gaming Laptop (Amount: ₹65,000 / 6,500,000 paise)
+- **Failure Trigger**: Issuing bank server timeout during 3D-Secure OTP authorization (`GATEWAY_ERROR`)
 
-3. **Interactive Checkout & Verification (`POST /api/payment/create-order` & `verify`)**:
-   - **File**: `server-node/src/controllers/payment.controller.ts`
-   - Used by the frontend demo checkout modal. Creates an active Razorpay order (`orders.create`), receives payment authorization credentials (`razorpay_payment_id`, `razorpay_order_id`, `razorpay_signature`), verifies the cryptographic HMAC signature, and marks the transaction as `RECOVERED`.
-
-4. **Batch AI Execution Trigger (`POST /api/agent/run-batch`)**:
-   - **File**: `server-node/src/controllers/agent.controller.ts`
-   - Triggered manually from the dashboard's "Run AI Recovery Batch" button. Fetches all unrecovered transactions with fewer than 3 retries and passes each through the recovery engine.
-
-5. **Automated Background Cron Sequencer**:
-   - **File**: `server-node/src/jobs/retry-sequencer.ts`
-   - Scheduled tasks that awake automatically:
-     - Every hour: executes scheduled future retry links and overdue promise-to-pay commitments.
-     - Every day at 9:00 AM (Day 1–3 of the month): retries failed recurring mandates when salary accounts are credited.
+```json
+{
+  "entity": "event",
+  "account_id": "acc_PqRst123456789",
+  "event": "payment.failed",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_O8jXzK9102abCd",
+        "amount": 6500000,
+        "currency": "INR",
+        "status": "failed",
+        "order_id": "order_MnoPqr456789",
+        "method": "card",
+        "description": "Payment for ROG Gaming Laptop",
+        "email": "rohan.sharma@gmail.com",
+        "contact": "+919876543210",
+        "error_code": "GATEWAY_ERROR",
+        "error_description": "Bank network timed out during 3D Secure verification",
+        "error_source": "issuing_bank",
+        "error_step": "payment_authorization",
+        "error_reason": "payment_verification_failed",
+        "created_at": 1727181000
+      }
+    }
+  }
+}
+```
 
 ---
 
-## 4. File-by-File Explanation: `server-node`
+## 4. Step-by-Step Data Journey Through Every Server File
 
-### Core & Entrypoints
+### Phase 1: Ingestion & Verification (`server-node`)
 
 #### [`server-node/src/index.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/index.ts)
-- **Role**: Express application bootstrapper.
-- **How it handles data**:
-  - Sets up `express.raw({ type: 'application/json' })` specifically for `/api/webhooks`. This is mandatory so Razorpay's cryptographic HMAC SHA-256 signature can be checked against the exact raw byte string before any parsing alters whitespace.
-  - Mounts standard `express.json()` for all other API routes.
-  - Enables CORS for `http://localhost:5173` (the Vite client).
-  - Mounts the 5 top-level routers: `/api/webhooks`, `/api/agent`, `/api/dashboard`, `/api/seed`, `/api/payment`.
-  - Exposes `GET /health` to confirm server status.
-  - Calls `startCronJobs()` upon HTTP server listening on port 4000.
 
----
+- **What this file does on the dataset**:
+  - Line 17: `app.use('/api/webhooks', express.raw({ type: 'application/json' }));`
+    - **Crucial reason**: Captures the raw binary buffer of the incoming webhook body. If JSON parsing altered spaces, tabs, or line returns, Razorpay's HMAC SHA-256 cryptographic check would fail.
+  - Line 20: `app.use(express.json());` parses JSON for all other REST endpoints (`/api/dashboard`, `/api/agent`, `/api/payment`, `/api/seed`).
+  - Line 28: Directs our dataset buffer to `webhookRouter`.
+  - Line 40: `startCronJobs()` initiates background sequencers for delayed retries and promise-to-pay trackers.
 
-### Routes Layer (`src/routes/`)
+#### [`server-node/src/routes/webhook.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/webhook.routes.ts)
 
-Each file binds clean REST URIs to corresponding controller functions:
+- **What this file does on the dataset**:
+  - Binds HTTP `POST /api/webhooks` directly to the `handleRazorpayWebhook` controller function.
 
-1. **[`server-node/src/routes/webhook.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/webhook.routes.ts)**:
-   - `POST /` $\rightarrow$ calls `handleRazorpayWebhook`.
-2. **[`server-node/src/routes/agent.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/agent.routes.ts)**:
-   - `POST /run-batch` $\rightarrow$ calls `runBatch` (runs AI on all failed transactions).
-   - `GET /batches` $\rightarrow$ calls `getBatches` (returns history of batch recoveries).
-3. **[`server-node/src/routes/dashboard.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/dashboard.routes.ts)**:
-   - `GET /stats` $\rightarrow$ aggregate KPI metrics.
-   - `GET /transactions` $\rightarrow$ paginated transaction table with filters.
-   - `GET /transactions/:id` $\rightarrow$ detailed view of a single transaction.
-   - `GET /audit-logs` $\rightarrow$ audit trail events.
-4. **[`server-node/src/routes/seed.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/seed.routes.ts)**:
-   - `POST /generate` $\rightarrow$ calls `generateMockData`.
-5. **[`server-node/src/routes/payment.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/payment.routes.ts)**:
-   - `POST /create-order` $\rightarrow$ creates Razorpay checkout order.
-   - `POST /verify` $\rightarrow$ verifies checkout signature and marks recovered.
+#### [`server-node/src/services/razorpay.service.ts` (Webhook Verification)](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/razorpay.service.ts#L65-L77)
 
----
-
-### Controllers Layer (`src/controllers/`)
+- **What this file does on the dataset**:
+  - Lines 65–77: `verifyWebhookSignature(rawBody, signature, secret)`:
+    - Takes `req.headers["x-razorpay-signature"]` and `RAZORPAY_WEBHOOK_SECRET`.
+    - Runs:
+      ```typescript
+      const expected = crypto
+        .createHmac("sha256", secret)
+        .update(rawBody)
+        .digest("hex");
+      return expected === signature;
+      ```
+    - Protects the system against malicious spoofed payments or forged failure injections.
 
 #### [`server-node/src/controllers/webhook.controller.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/webhook.controller.ts)
-- **Role**: Razorpay webhook ingestion and lifecycle router.
-- **Step-by-step logic**:
-  1. `handleRazorpayWebhook()` reads `x-razorpay-signature` header and validates it using `verifyWebhookSignature(rawBody, signature, secret)`.
-  2. If signature fails, logs `WEBHOOK_SIGNATURE_INVALID` and rejects with HTTP 400.
-  3. If valid, immediately sends `200 { received: true }` back to Razorpay to prevent webhook delivery timeouts (Razorpay drops webhooks that do not respond within 5 seconds).
-  4. Wraps further execution in `setImmediate()` to process asynchronously in Node's event loop:
-     - `payment.failed`: Calls `handlePaymentFailed()`. Creates or finds the `Customer`, records a new `Transaction` with status `FAILED`, records an `AuditLog`, and immediately invokes `executeRecovery(transaction.id)`.
-     - `payment.captured` / `payment_link.paid`: Calls `handlePaymentSucceeded()`. **CRITICAL STOPPING RULE**: Finds the transaction by Razorpay Payment ID or Order ID, sets `status = 'RECOVERED'`, and marks all pending/scheduled recovery actions as `CANCELLED` with reason `"Payment received — stopping recovery"`.
-     - `subscription.charged.failed`: Calls `handleSubscriptionFailed()`, records failure type `SUBSCRIPTION_FAILED`, and invokes `executeRecovery()`.
-     - `invoice.expired`: Calls `handleInvoiceExpired()`, sets customer type to `B2B`, sets `invoiceDueDate`, and invokes `executeRecovery()`.
 
-#### [`server-node/src/controllers/seed.controller.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/seed.controller.ts)
-- **Role**: High-performance mock data seeder.
-- **Step-by-step logic**:
-  1. Purges existing demo data (`AuditLog`, `RecoveryAction`, `Transaction`, `Customer`, `RecoveryBatch`).
-  2. Synthesizes `count` (default 50) realistic records spanning:
-     - 80% B2C consumers (Indian names, phone numbers, retail carts, ₹99–₹9,999).
-     - 20% B2B corporate procurement (Infosys, TCS, Wipro, invoices ₹5,000–₹5,00,000).
-     - Diverse error scenarios (`BAD_REQUEST_ERROR`, `GATEWAY_ERROR`, `SERVER_ERROR`, `INSUFFICIENT_FUNDS`, `CARD_EXPIRED`, `CHECKOUT_ABANDONED`, `SUBSCRIPTION_CHARGE_FAILED`, `INVOICE_EXPIRED`, `MANDATE_DEBIT_FAILED`).
-  3. Executes two bulk batch inserts: `prisma.customer.createMany` followed by `prisma.transaction.createMany`.
-  4. Returns scenario count breakdown to the client.
-
-#### [`server-node/src/controllers/dashboard.controller.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/dashboard.controller.ts)
-- **Role**: Data aggregation engine feeding the frontend dashboard.
-- **Endpoints**:
-  - `getStats`: Runs parallel queries using `prisma.transaction.aggregate` and `groupBy`:
-    - `totalAtRisk`: Sum of all failed amounts.
-    - `totalRecovered`: Sum of recovered amounts.
-    - `recoveryRate`: $\frac{\text{totalRecovered}}{\text{totalAtRisk}} \times 100$.
-    - `statusBreakdown`: Count and volume grouped by `FAILED`, `IN_RECOVERY`, `RECOVERED`, `ABANDONED`.
-    - `failureTypeBreakdown`: Grouped by `PAYMENT_FAILED`, `CHECKOUT_ABANDONED`, etc.
-    - `recentRecoveries`: Last 10 successful recoveries with customer details.
-  - `getTransactions`: Paginated transaction list (page, limit, status, failureType filter) including customer details and the latest AI recovery action.
-  - `getTransactionDetail`: Returns a single transaction by ID, including its full customer relation, all historical `recoveryActions` sorted chronologically, and complete `auditLogs`.
-  - `getAuditLogs`: Returns paginated immutable system logs.
-
-#### [`server-node/src/controllers/agent.controller.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/agent.controller.ts)
-- **Role**: Batch execution controller.
-- **Endpoints**:
-  - `runBatch`: Invokes `runBatchRecovery()` from `recovery-engine.ts`.
-  - `getBatches`: Fetches past `RecoveryBatch` records, joins transactions that were recovered within the batch timeframe, and computes the actual money recovered per batch.
-
-#### [`server-node/src/controllers/payment.controller.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/payment.controller.ts)
-- **Role**: Live simulation checkout handler.
-- **Endpoints**:
-  - `createOrder`: Calls `razorpay.orders.create({ amount, currency: 'INR', receipt })` and returns `order_id`.
-  - `verifyPayment`: Computes HMAC SHA-256 of `${razorpay_order_id}|${razorpay_payment_id}` using `RAZORPAY_KEY_SECRET`. If matching, sets the transaction's status to `RECOVERED` and writes an audit log.
-
----
-
-### Services & Business Logic (`src/services/`)
-
-#### [`server-node/src/services/recovery-engine.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/recovery-engine.ts)
-- **Role**: **The Central Nervous System** of the recovery pipeline.
-- **Functions**:
-  - `executeRecovery(transactionId: string)`:
-    1. **Pre-flight Stopping Rules**:
-       - If `transaction.status === 'RECOVERED'`, abort.
-       - If `transaction.retryCount >= 3`, mark `transaction.status = 'ABANDONED'` and abort.
-    2. **Call Intelligence**: Calls `getAIDecision()` in `python-bridge.ts` passing customer type, amount, error codes, cart items, retry count, etc.
-    3. **Evaluate AI Decision**:
-       - If `action === 'NO_ACTION'`: Records `RecoveryAction` with status `COMPLETED` and halts (e.g. fraud protection).
-       - If action requires a payment link (e.g. `IMMEDIATE_RETRY_LINK`, `DISCOUNT_OFFER`, `DELAYED_RETRY_LINK`, `HINGLISH_VOICE_CALL`):
-         - Applies discount percentage if recommended (e.g. 10% off).
-         - Calls `generateRecoveryPaymentLink()` in `razorpay.service.ts` with 48-hour auto-expiry.
-       - If `action === 'HINGLISH_VOICE_CALL'`:
-         - Calls `generateHinglishVoice()` in `python-bridge.ts`.
-         - Saves returned `.mp3` path to `voiceAudioPath`.
-    4. **Persist Action**:
-       - Creates a `RecoveryAction` record in Prisma with `aiRootCause`, `aiReasoning`, `aiConfidence`, `recoveryProb`, `paymentLinkUrl`, `voiceAudioPath`, and `scheduledFor` (if delayed).
-    5. **Update Transaction State**:
-       - Updates `Transaction`: `status = 'IN_RECOVERY'`, `retryCount = retryCount + 1`.
-    6. **Audit**:
-       - Writes `RECOVERY_ACTION_EXECUTED` log to `AuditLog`.
-  - `runBatchRecovery()`:
-    1. Queries all `Transaction` rows where `status == 'FAILED'` and `retryCount < 3`.
-    2. Creates a `RecoveryBatch` entry with `totalAtRisk = sum(amount)`.
-    3. Loops through each transaction, calling `executeRecovery(txn.id)` with a small throttle delay (500ms) to respect rate limits.
-    4. Marks batch `COMPLETED` and returns count and amount at risk.
-
-#### [`server-node/src/services/python-bridge.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/python-bridge.ts)
-- **Role**: HTTP client adapter to the Python AI microservice (`http://localhost:8000`).
-- **Methods**:
-  - `getAIDecision(context: FailedTransactionContext)`: Calls `POST /analyze`. If Python is offline, gracefully degrades to a deterministic fallback (`action: 'IMMEDIATE_RETRY_LINK'`, `confidence: 0.5`).
-  - `extractPromiseToPay(customerMessage: string)`: Calls `POST /extract-promise`.
-  - `generateHinglishVoice(customerName, amount, paymentLink)`: Calls `POST /generate-voice`.
-
-#### [`server-node/src/services/razorpay.service.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/razorpay.service.ts)
-- **Role**: Razorpay SDK wrapper.
-- **Methods**:
-  - `generateRecoveryPaymentLink(opts)`: Calls `razorpay.paymentLink.create()` with amount in paise, notification flags (SMS/Email), reminder enablements, 48-hour expiry timestamp, and `reference_id` pointing to our internal Transaction ID. (Has fallback mock mode if keys are unset).
-  - `verifyWebhookSignature(body, signature, secret)`: Computes `crypto.createHmac('sha256', secret).update(body).digest('hex')` and validates against the received signature.
-
-#### [`server-node/src/services/audit.service.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/audit.service.ts)
-- **Role**: Tamper-proof audit logger.
-- **Method**:
-  - `log(event, actor, details, transactionId?)`: Writes an immutable row into the `AuditLog` table. Wrapped in `try/catch` so logging never interrupts critical recovery flows.
+- **What this file does on the dataset**:
+  - **Lines 28–39**: Reads raw body string, verifies signature, writes `WEBHOOK_RECEIVED` log to `AuditLog`.
+  - **Line 41**: **Immediate Acknowledgment**:
+    ```typescript
+    res.status(200).json({ received: true });
+    ```
+    Razorpay forcefully cancels webhooks that take longer than 5 seconds. Sending `200 OK` instantly guarantees delivery success.
+  - **Line 44**: `setImmediate(...)`: Defers execution to Node's background task queue so the event loop remains unblocked.
+  - **Lines 63–79**: `WEBHOOK_EVENT_HANDLERS` map:
+    - Matches `"payment.failed"` in $O(1)$ time and dispatches to `handlePaymentFailed(payload.payload.payment.entity)`.
+  - **Lines 82–120**: `handlePaymentFailed(payment)`:
+    1. **Idempotency check**:
+       ```typescript
+       if (
+         payment?.id &&
+         (await prisma.transaction.findFirst({
+           where: { razorpayPaymentId: payment.id },
+         }))
+       )
+         return;
+       ```
+       If Razorpay retries a webhook for `pay_O8jXzK9102abCd`, we reject duplicates to prevent double-charging or duplicate customer outreach.
+    2. **Find-or-Create Customer**:
+       Calls `findOrCreateCustomer("rohan.sharma@gmail.com", { name: "+919876543210", phone: "+919876543210" })`.
+       - If Rohan is a new customer, inserts a row into `Customer`.
+       - Returns `customer.id = "cust_abc123"`.
+    3. **Create Failed Transaction in DB**:
+       Converts paise to rupees:
+       ```typescript
+       amount: 6500000 / 100; // = 65000.00 INR
+       ```
+       Creates record in `Transaction` table:
+       - `status = "FAILED"`
+       - `failureType = "PAYMENT_FAILED"`
+       - `errorCode = "GATEWAY_ERROR"`
+       - `errorDescription = "Bank network timed out during 3D Secure verification"`
+    4. **Audit Logging**:
+       Calls `log("PAYMENT_FAILED_LOGGED", "RAZORPAY_WEBHOOK", { paymentId: "pay_O8jXzK9102abCd", amount: 65000 })`.
+    5. **Trigger Engine**:
+       Invokes `executeRecovery(transaction.id)`.
 
 #### [`server-node/src/services/db.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/db.ts)
-- **Role**: Prisma Client singleton. Reuses existing client instances in development to avoid exhausting database connection pools on hot reloads.
+
+- **What this file does on the dataset**:
+  - Instantiates a clean, shared `PrismaClient` connected to PostgreSQL via Supabase's transaction pooler (`aws-0-ap-south-1.pooler.supabase.com:5432`).
+  - Manages connection lifecycle and connection limits (`connection_limit=3`).
+
+#### [`server-node/prisma/schema.prisma`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/prisma/schema.prisma)
+
+- **What this file defines**:
+  - `model Customer`: Holds personal details, phone, and type (`B2C` vs `B2B`).
+  - `model Transaction`: Foreign key to `Customer`. Tracks lifecycle status (`FAILED`, `IN_RECOVERY`, `RECOVERED`, `ABANDONED`, `PROMISE_TO_PAY`).
+  - `model RecoveryAction`: Foreign key to `Transaction`. Stores AI diagnostics, confidence, payment links, and Hinglish audio paths.
+  - `model AuditLog`: Immutable append-only log of every system event.
+  - `model RecoveryBatch`: Tracks aggregate recovery metrics for hackathon benchmarking.
+
+#### [`server-node/src/services/audit.service.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/audit.service.ts)
+
+- **What this file does on the dataset**:
+  - `log(event, actor, details, transactionId?)`:
+    - Inserts a record into the `AuditLog` table.
+    - Wrapped in a `try/catch` block so logging exceptions never crash the primary payment recovery pipeline.
+    - Emits real-time diagnostic output to the Node.js server console.
 
 ---
 
-### Background Cron Jobs (`src/jobs/`)
+### Phase 2: Orchestration & Python Bridge (`server-node`)
 
-#### [`server-node/src/jobs/retry-sequencer.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/jobs/retry-sequencer.ts)
-- **Role**: Asynchronous schedulers and escalation sequences.
-- **Schedules**:
-  1. `0 * * * *` (Hourly):
-     - `checkScheduledActions()`: Finds `RecoveryAction` where `status = 'SCHEDULED'` and `scheduledFor <= now()`. Executes the recovery action.
-     - `checkPromiseToPay()`: Finds `Transaction` where `status = 'PROMISE_TO_PAY'` and `promisedPayDate <= now()`. Automatically triggers a follow-up recovery action.
-     - `checkB2BEscalation()`: Escalates B2B unpaid invoices based on days elapsed:
-       - Attempt 0: Polite reminder email.
-       - Attempt 1 (after 2 days): Firm payment notice.
-       - Attempt 2 (after 4 days): Escalation to CFO / senior leadership.
-  2. `0 9 * * *` (Daily at 9:00 AM):
-     - `retryMandates()`: Checks if current day is between the 1st and 3rd of the month (salary credit window in India). Automatically retries failed recurring auto-debit mandates.
+#### [`server-node/src/services/recovery-engine.ts` (Part 1)](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/recovery-engine.ts#L1-L75)
+
+- **What this file does on the dataset**:
+  - **Lines 17–28**: Validates that transaction `clx_rohan_001` exists.
+  - **Stopping Rule #1 check**: Is `txn.status === "RECOVERED"`? No.
+  - **Stopping Rule #2 check**: Is `txn.retryCount >= 3`? No (it's 0).
+  - **Lines 44–60**: Prepares the `FailedTransactionContext` payload:
+    ```typescript
+    {
+      transactionId: "clx_rohan_001",
+      customerId: "cust_abc123",
+      customerName: "Rohan Sharma",
+      customerEmail: "rohan.sharma@gmail.com",
+      customerPhone: "+919876543210",
+      customerType: "B2C",
+      amount: 65000,
+      failureType: "PAYMENT_FAILED",
+      errorCode: "GATEWAY_ERROR",
+      errorDescription: "Bank network timed out during 3D Secure verification",
+      retryCount: 0,
+      minutesSinceFailure: 1
+    }
+    ```
+  - Dispatches this context to `getAIDecision()` in `python-bridge.ts`.
+
+#### [`server-node/src/services/python-bridge.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/python-bridge.ts)
+
+- **What this file does on the dataset**:
+  - **Lines 35–54**: Makes an HTTP POST request to `http://localhost:8000/analyze` with a 30-second timeout.
+  - **Lines 57–87**: Contains a **deterministic fallback rule**:
+    - If Python microservice is down or network breaks, Node doesn't crash; it safely defaults to rule-based fallback decisioning based on `errorCode`, `amount`, and `customerType`.
 
 ---
 
-### Database Schema (`prisma/schema.prisma`)
-
-- **Entities**:
-  - `Customer`: Contains contact details, `CustomerType` (`B2C` or `B2B`), and company name.
-  - `Transaction`: Tracks payment amount, currency, status (`FAILED`, `IN_RECOVERY`, `RECOVERED`, `ABANDONED`, `PROMISE_TO_PAY`), failure type, error codes, retry count, cart items, due dates, and recovered amounts.
-  - `RecoveryAction`: Records each AI decision (`actionType`, `aiRootCause`, `aiReasoning`, `aiConfidence`, `recoveryProb`), execution assets (`paymentLinkUrl`, `voiceAudioPath`), timestamps, and cancellation state (`cancelledAt`, `cancelReason`).
-  - `AuditLog`: Immutable trail containing event, actor (`RAZORPAY_WEBHOOK`, `AI_AGENT`, `CRON_JOB`, `USER`, `SYSTEM`), details JSON, and timestamp.
-  - `RecoveryBatch`: Tracks batch operations, money at risk, and money recovered.
-
----
-
-## 5. File-by-File Explanation: `server-python`
-
-### Core & Entrypoint (`main.py`)
+### Phase 3: Cognitive Intelligence & Probability (`server-python`)
 
 #### [`server-python/main.py`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/main.py)
-- **Role**: FastAPI microservice entrypoint.
-- **How it handles data**:
-  - Loads `.env` file containing `GEMINI_API_KEY`.
-  - Configures CORS for `http://localhost:4000` (Node server) and `http://localhost:5173` (Frontend).
-  - Mounts 3 route modules:
-    - `analyze_router` (Recovery decisions).
-    - `voice_router` (Hinglish audio generation & audio file serving).
-    - `promise_router` (Natural language promise-to-pay extraction).
-  - Exposes `GET /health` endpoint.
 
----
-
-### API Routes Layer (`routes/`)
+- **What this file does on the dataset**:
+  - Initializes FastAPI application with CORS middleware (`http://localhost:4000` and `http://localhost:5173`).
+  - Routes incoming `/analyze` request to `routes/analyze.py`.
 
 #### [`server-python/routes/analyze.py`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/routes/analyze.py)
-- **Role**: Core AI decision endpoint (`POST /analyze`).
-- **Input**: `TransactionContext` (Pydantic model validating `transactionId`, `amount`, `failureType`, `errorCode`, `retryCount`, `cartItems`, `customerType`, etc.).
-- **Two-Stage Processing Pipeline**:
-  1. **Stage 1 (Mathematical Scoring)**:
-     - Calls `compute_recovery_probability()` from `models/recovery_probability.py`.
-     - Calls `recommend_action()` to determine base mathematical strategy, discount eligibility, and scheduled delays.
-  2. **Stage 2 (Gemini LLM Enrichment & Validation)**:
-     - Calls `analyze_transaction()` from `agents/root_cause_agent.py`, passing transaction context, math probability, and recommended baseline action.
-     - Receives deep natural-language root cause diagnosis, sentiment detection, and action validation.
-  3. **Output**: `AIDecisionResponse` containing:
-     - `action`: Validated recovery action string.
-     - `rootCause`: Plain-English explanation of why the payment failed.
-     - `reasoning`: Strategic justification for the chosen channel/incentive.
-     - `confidence`: Confidence score (0.0 to 1.0).
-     - `recoveryProbability`: Calculated mathematical probability.
-     - `scheduledDelay`: Recommended delay in minutes.
-     - `discountPercent`: Discount percentage (e.g. 5% or 10%).
-     - `hinglishMessage`: Hinglish text if voice call is recommended.
-     - `customerSentiment`: Detected sentiment (`FRUSTRATED`, `WILLING`, `UNAWARE`, etc.).
 
-#### [`server-python/routes/voice.py`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/routes/voice.py)
-- **Role**: Voice generation and streaming.
-- **Endpoints**:
-  - `POST /generate-voice`: Accepts customer name, amount, and payment link. Calls `generate_hinglish_audio()` in `hinglish_voice.py` and returns the generated `.mp3` path.
-  - `GET /audio/{filename}`: Streams the generated `.mp3` file from `audio_files/` with `media_type="audio/mpeg"`, allowing direct playback inside the React dashboard.
-
-#### [`server-python/routes/promise.py`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/routes/promise.py)
-- **Role**: Promise-to-pay NLP parser (`POST /extract-promise`).
-- **Input**: `{ "message": "I'm travelling right now, will pay by Friday" }`.
-- **Output**: `{ "promisedDate": "2026-09-25", "confidence": 0.9, "rawMention": "by Friday" }`.
-
----
-
-### Statistical & Decision Model (`models/recovery_probability.py`)
+- **What this file does on the dataset**:
+  - **Lines 17–33**: Validates input using Pydantic `TransactionContext`.
+  - **Lines 57–74 (Stage 1: Statistical Model)**:
+    Calls `compute_recovery_probability()` and `recommend_action()` from `models/recovery_probability.py`.
+  - **Lines 76–94 (Stage 2: Gemini Cognitive Agent)**:
+    Calls `analyze_transaction()` in `agents/root_cause_agent.py` to get LLM second opinion.
+  - **Lines 96–112**: Formulates `AIDecisionResponse` and returns JSON to Node.
 
 #### [`server-python/models/recovery_probability.py`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/models/recovery_probability.py)
-- **Role**: Transparent, auditable mathematical scoring model for financial decisions.
-- **Functions**:
-  - `compute_recovery_probability(...)`:
-    Calculates $P(\text{recovery}) \in [0.0, 1.0]$ using 5 weighted domain features:
-    1. **Base Error Severity Weight**:
-       - `GATEWAY_ERROR`: 0.85 (network glitch; high intent).
-       - `SUBSCRIPTION_CHARGE_FAILED`: 0.70.
-       - `CHECKOUT_ABANDONED`: 0.65.
-       - `INSUFFICIENT_FUNDS`: 0.40.
-       - `SUSPECTED_FRAUD`: 0.05.
-    2. **Amount Factor**:
-       - Sweet spot (₹500 – ₹50,000): multiplier 1.0.
-       - Small amounts (< ₹100): multiplier 0.70.
-       - Large enterprise (> ₹50,000): multiplier 0.95.
-    3. **Retry Count Decay**:
-       - $\max(0.30, 1.0 - (\text{retryCount} \times 0.25))$.
-    4. **Time Sensitivity Factor**:
-       - For checkout abandonment: < 30 mins = 1.0; 30–120 mins = 0.75; > 2 hours = 0.45.
-    5. **Customer Type Multiplier**:
-       - B2B multiplier = 1.1 (contractual obligations increase eventual collection).
-  - `recommend_action(...)`:
-    Deterministic, bounded decision rules:
-    - If $P < 0.10$ or `SUSPECTED_FRAUD` $\rightarrow$ `NO_ACTION`.
-    - If Amount > ₹50,000 and $P > 0.60$ $\rightarrow$ `HINGLISH_VOICE_CALL` (high-touch personalized outreach).
-    - If B2B `INVOICE_OVERDUE` $\rightarrow$ `B2B_REMINDER_EMAIL` (attempt 0), `B2B_FIRM_EMAIL` (attempt 1), `B2B_ESCALATION_EMAIL` (attempt 2).
-    - If `GATEWAY_ERROR` / `SERVER_ERROR` $\rightarrow$ `IMMEDIATE_RETRY_LINK` (immediate re-attempt).
-    - If `INSUFFICIENT_FUNDS` with Amount > ₹2,000 $\rightarrow$ `DISCOUNT_OFFER` (10% discount after 2-hour delay).
-    - If `CHECKOUT_ABANDONED` $\rightarrow$ `IMMEDIATE_RETRY_LINK` (5% discount if cart > ₹1,000).
 
----
-
-### AI Agents & Synthesis (`agents/`)
+- **What this file does on the dataset**:
+  - **Step 1: Probability Formula**:
+    $$P(\text{recovery}) = \text{base\_prob} \times \text{amount\_factor} \times \text{retry\_decay} \times \text{time\_factor} \times \text{customer\_factor}$$
+    - `error_code = "GATEWAY_ERROR"`: `base_prob = 0.85` (temporary bank glitch, high recovery chance).
+    - `amount = 65000`: `amount_factor = 0.95` (high-value retail).
+    - `retry_count = 0`: `retry_decay = 1.0` (fresh failure).
+    - `minutes = 1`: `time_factor = 1.0`.
+    - `customer_type = "B2C"`: `customer_factor = 1.0`.
+    - **Resulting Probability**: $0.85 \times 0.95 \times 1.0 \times 1.0 \times 1.0 = \mathbf{0.808}$ (clamped to 3 decimals: **0.808**).
+  - **Step 2: Recommended Action Mapping**:
+    - Lines 103–105:
+      ```python
+      if amount > 50_000 and probability > 0.6 and customer_type == "B2C":
+          return R("HINGLISH_VOICE_CALL", "High-value — personal Hinglish voice outreach", s=5)
+      ```
+    - Because Rohan's laptop is ₹65,000 (> ₹50,000) and probability is 0.808 (> 0.6), the math model recommends **`HINGLISH_VOICE_CALL`** with a 5-minute cooling delay.
 
 #### [`server-python/agents/root_cause_agent.py`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/agents/root_cause_agent.py)
-- **Role**: Gemini 2.5 Flash cognitive layer.
-- **Model**: `genai.GenerativeModel("gemini-2.5-flash")`.
-- **Functions**:
-  - `analyze_transaction(transaction_context, math_model_action, recovery_probability)`:
-    - Injects a strict system prompt constraining outputs to valid JSON conforming to the allowed action types.
-    - Diagnoses root cause in plain English (e.g., *"Customer experienced an issuing bank timeout during 3D Secure verification"*).
-    - Evaluates customer sentiment and urgency.
-    - Validates or refines the mathematical recommendation.
-    - Includes fallback handling if Gemini API quota or network errors occur.
-  - `extract_promise_to_pay(customer_message)`:
-    - Resolves relative time phrases ("tomorrow", "coming Monday", "end of month") against today's date into an explicit ISO `YYYY-MM-DD` date.
+
+- **What this file does on the dataset**:
+  - Prompts **Gemini 2.5 Flash** (`gemini-2.5-flash`) with our system prompt, the transaction context, and the math model baseline:
+    ```json
+    {
+      "root_cause": "Customer's issuing bank timed out during 3D-Secure OTP verification on a high-value transaction.",
+      "reasoning": "High-value transaction of ₹65,000 has strong recovery probability (0.81). A personal Hinglish voice call establishes trust and reassures the customer that their money was not debited.",
+      "validated_action": "HINGLISH_VOICE_CALL",
+      "confidence": 0.85,
+      "customer_sentiment": "WILLING",
+      "urgency": "IMMEDIATE",
+      "hinglish_message": "Namaste Rohan ji, aapka ₹65,000 ka laptop payment process nahi ho saka. Koi tension nahi, aapke liye naya secure link ready hai."
+    }
+    ```
+  - **Lines 78–130 (`_sanitize_analysis`)**:
+    - Enforces safety: validates `validated_action` against `ALLOWED_ACTIONS` frozenset.
+    - Clamps confidence $\le 0.95$.
+    - Ensures sentiment and urgency fit strict enum values.
+
+#### [`server-python/routes/voice.py`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/routes/voice.py)
+
+- **What this file does on the dataset**:
+  - `POST /generate-voice`: Accepts `{ customerName: "Rohan Sharma", amount: 65000, paymentLink: "https://rzp.io/l/plink_123" }`.
+  - Calls `generate_hinglish_audio()` in `hinglish_voice.py`.
+  - `GET /audio/{filename}`: Exposes the generated `.mp3` via streaming audio for browser playback.
 
 #### [`server-python/agents/hinglish_voice.py`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/agents/hinglish_voice.py)
-- **Role**: Cultural adaptation and localized audio generation.
-- **Functions**:
-  - `build_hinglish_script(customer_name, amount, payment_link)`:
-    Generates a natural, respectful Hinglish script:
-    > *"Namaste, [Name] ji! Aapka [Amount] rupaye ka payment unfortunately process nahi ho saka. Koi tension nahi — hum aapki help karne ke liye yahan hain. Aapke liye ek naya payment link ready hai. Kripya apna SMS ya email check karein aur payment complete karein. Dhanyavaad!"*
-  - `generate_hinglish_audio(...)`:
-    Uses `gTTS` with Hindi phonetics (`lang="hi"`), writes the resulting `.mp3` to `server-python/audio_files/`, and returns the absolute filepath.
+
+- **What this file does on the dataset**:
+  - Generates culturally attuned Hinglish script:
+    > _"Namaste, Rohan ji! Aapka 65,000 rupaye ka payment process nahi ho saka. Koi tension nahi. Aapke liye ek naya payment link ready hai. Kripya apna SMS ya email check karein aur payment complete karein. Dhanyavaad!"_
+  - Uses `gTTS(text=script, lang="hi", slow=False)`.
+  - Saves file to `server-python/audio_files/recovery_7a8b9c0d.mp3`.
+  - Returns file path to Node.js.
+
+#### [`server-python/routes/promise.py`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/routes/promise.py)
+
+- **What this file does**:
+  - Handles incoming customer replies (e.g. _"I will pay by Friday afternoon"_).
+  - Uses Gemini NLP to parse relative dates into strict ISO format (`YYYY-MM-DD`).
 
 ---
 
-## 6. Data Lifecycle & Where Results Go
+### Phase 4: Execution & Persistence (`server-node`)
 
-### 1. Database Storage (PostgreSQL via Prisma)
-Every step of the recovery process is recorded across four database tables:
-- **`Transaction`**:
-  - Status transitions: `FAILED` $\rightarrow$ `IN_RECOVERY` $\rightarrow$ `RECOVERED` (or `ABANDONED` if max retries exceeded).
-  - Stores `retryCount`, `recoveredAmount`, and `recoveredAt`.
-- **`RecoveryAction`**:
-  - Records the exact action taken, timestamp, `aiRootCause`, `aiReasoning`, `aiConfidence`, `recoveryProb`, `paymentLinkUrl`, `paymentLinkId`, and `voiceAudioPath`.
-  - If payment succeeds later, status becomes `CANCELLED` with `cancelReason`.
-- **`AuditLog`**:
-  - Immutable historical record of events: `SEED_COMPLETED`, `WEBHOOK_RECEIVED`, `AI_DECISION_MADE`, `PAYMENT_LINK_GENERATED`, `RECOVERY_ACTION_EXECUTED`, `PAYMENT_RECOVERED`.
-- **`RecoveryBatch`**:
-  - Tracks total money at risk vs recovered for hackathon ROI benchmarking.
+#### [`server-node/src/services/recovery-engine.ts` (Part 2)](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/recovery-engine.ts#L110-L240)
 
-### 2. File Assets Storage
-- Audio files generated by the Hinglish voice agent are stored in `server-python/audio_files/recovery_[hash].mp3`.
-- Served over HTTP via `GET /audio/{filename}` in `server-python/routes/voice.py`.
+- **What this file does on the dataset**:
+  1. **Generates Razorpay Link**:
+     Since action is `HINGLISH_VOICE_CALL`, it requires a real payment link.
+     - Calls `generateRecoveryPaymentLink()` in `razorpay.service.ts`.
+     - Description: `"Complete your pending payment"`.
+     - Amount: 6,500,000 paise (₹65,000).
+     - TTL: Exactly 24 hours (`expireBy: now + 24*3600`).
+     - Returns: `paymentLinkUrl = "https://rzp.io/l/plink_ROG65k"`.
+  2. **Generates Hinglish Voice**:
+     Calls `generateHinglishVoice("Rohan Sharma", 65000, linkUrl)`.
+     Saves returned `.mp3` path to `voiceAudioPath`.
+  3. **Creates `RecoveryAction` in Database**:
+     ```typescript
+     await prisma.recoveryAction.create({
+       data: {
+         transactionId: "clx_rohan_001",
+         actionType: "HINGLISH_VOICE_CALL",
+         status: "COMPLETED",
+         aiRootCause:
+           "Customer's issuing bank timed out during 3D-Secure OTP verification on a high-value transaction.",
+         aiReasoning:
+           "High-value transaction of ₹65,000 has strong recovery probability (0.81)...",
+         aiConfidence: 0.85,
+         recoveryProb: 0.808,
+         paymentLinkUrl: "https://rzp.io/l/plink_ROG65k",
+         voiceAudioPath: "audio_files/recovery_7a8b9c0d.mp3",
+         executedAt: new Date(),
+       },
+     });
+     ```
+  4. **Updates `Transaction` State**:
+     - `status = "IN_RECOVERY"`
+     - `retryCount = 1`
+  5. **Logs to `AuditLog`**:
+     Event `RECOVERY_ACTION_EXECUTED` saved for auditability.
 
-### 3. Frontend Result Retrieval (`client/src/api.ts`)
-The client fetches and displays recovery results via the following API endpoints:
-- `api.getStats()` $\rightarrow$ Renders KPI cards: Total at Risk, Total Recovered, Recovery Rate %, and Recent Recoveries list.
-- `api.getTransactions()` $\rightarrow$ Renders the main recovery table with badges, AI diagnosis, recovery probability, and payment link actions.
-- `api.getTransactionDetail(id)` $\rightarrow$ Renders the side-drawer showing timeline of actions, AI reasoning, and playable Hinglish audio recordings.
-- `api.getAuditLogs()` $\rightarrow$ Renders the real-time compliance audit stream.
-- `api.getBatches()` $\rightarrow$ Renders historical batch recovery runs and measured ROI.
+#### [`server-node/src/services/razorpay.service.ts` (Payment Link Creation)](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/razorpay.service.ts#L25-L60)
+
+- **What this file does on the dataset**:
+  - Prepares payload for Razorpay API (`razorpay.paymentLink.create`):
+    ```json
+    {
+      "amount": 6500000,
+      "currency": "INR",
+      "accept_partial": false,
+      "description": "Complete your pending payment",
+      "customer": {
+        "name": "Rohan Sharma",
+        "email": "rohan.sharma@gmail.com",
+        "contact": "+919876543210"
+      },
+      "notify": { "sms": true, "email": true },
+      "reminder_enable": true,
+      "expire_by": 1727267400,
+      "reference_id": "clx_rohan_001"
+    }
+    ```
+  - If API keys are not present in `.env`, runs in mock fallback mode to guarantee zero development friction.
 
 ---
 
-## 7. The Stopping Rules (Safety & Compliance)
+### Phase 5: Background Cron Jobs & Re-engagement (`server-node`)
 
-A crucial aspect of enterprise revenue recovery is **knowing when NOT to message a customer**. The system implements four strict stopping rules:
+#### [`server-node/src/jobs/retry-sequencer.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/jobs/retry-sequencer.ts)
+
+- **What this file does over time**:
+  - **Hourly (`0 * * * *`)**:
+    1. `checkScheduledActions()`: Finds actions where `status = "SCHEDULED"` and `scheduledFor <= now()`. Marks them `COMPLETED` and delivers outreach.
+    2. `checkPromiseToPay()`: Finds transactions where a customer promised to pay by date $X$, but $X$ has now passed. Re-triggers recovery.
+    3. `checkB2BEscalation()`: Follows up on overdue B2B invoices every 2 days:
+       - Attempt 0 $\rightarrow$ `B2B_REMINDER_EMAIL` (Polite reminder)
+       - Attempt 1 $\rightarrow$ `B2B_FIRM_EMAIL` (Firm notice after 2 days)
+       - Attempt 2 $\rightarrow$ `B2B_ESCALATION_EMAIL` (Escalation to CFO after 4 days)
+  - **Daily at 9:00 AM on Days 1–3 (`0 9 1-3 * *`)**:
+    - `retryMandates()`: Automatically retries failed recurring subscriptions during the Indian salary window (1st–3rd of every month).
+
+---
+
+### Phase 6: Frontend API & Interactive Recovery (`server-node`)
+
+#### [`server-node/src/routes/dashboard.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/dashboard.routes.ts) & [`dashboard.controller.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/dashboard.controller.ts)
+
+- **What this file does on the dataset**:
+  - `GET /api/dashboard/stats`: Includes Rohan's ₹65,000 in `totalAtRisk`. Once paid, shifts it to `totalRecovered` and recalculates `recoveryRate`.
+  - `GET /api/dashboard/transactions`: Returns Rohan's record with the active `HINGLISH_VOICE_CALL` badge and $P=80.8\%$ recovery probability.
+  - `GET /api/dashboard/transactions/:id`: Returns full transaction details, chronological action history, and audio playback link.
+  - `GET /api/dashboard/audit-logs`: Returns the immutable trail of actions taken on Rohan's payment.
+
+#### [`server-node/src/routes/agent.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/agent.routes.ts) & [`agent.controller.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/agent.controller.ts)
+
+- **What this file does**:
+  - `POST /api/agent/run-batch`: Triggers `runBatchRecovery()`, pulling all unrecovered failures and queuing them sequentially (with a 500ms delay) through the AI recovery engine.
+  - `GET /api/agent/batches`: Aggregates historical recovery runs showing measured money recovered for hackathon judges.
+
+#### [`server-node/src/routes/seed.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/seed.routes.ts) & [`seed.controller.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/seed.controller.ts)
+
+- **What these files do (Data Generation & Simulation Engine)**:
+  - **`POST /api/seed/generate?count=50`**:
+    1. **Database Purge**: Performs sequential FK-respecting deletions (`auditLog` -> `recoveryAction` -> `recoveryBatch` -> `transaction` -> `customer`) to establish a clean state.
+    2. **Synthetic Data Modeling**: Generates $N$ (default 50) Indian customer profiles (`20% B2B` corporations like Infosys/TechMahindra and `80% B2C` individuals) and attaches failed transactions across all 9 payment failure scenarios (`GATEWAY_ERROR`, `BAD_REQUEST_ERROR`, `SERVER_ERROR`, `INSUFFICIENT_FUNDS`, `CARD_EXPIRED`, `CHECKOUT_ABANDONED`, `SUBSCRIPTION_CHARGE_FAILED`, `INVOICE_EXPIRED`, `MANDATE_DEBIT_FAILED`).
+    3. **CSV Export Generation**: Formats all generated transactions and customer attributes (Transaction ID, Customer Name, Email, Phone, B2B/B2C Type, Company, Amount in INR, Failure Type, Error Code, Error Description, Status, Razorpay ID, Subscription ID, Due Date, Timestamp) into RFC 4180 compliant CSV.
+    4. **Disk Persistence**: Creates the `server-node/exports` directory and writes `exports/generated_transactions.csv`.
+    5. **Response**: Returns JSON with generation breakdown and a `downloadUrl: "/api/seed/download-csv"`.
+  - **`GET /api/seed/download-csv`**:
+    - Serves the generated CSV file directly as an attachment (`Content-Type: text/csv`, `Content-Disposition: attachment; filename="generated_transactions_<timestamp>.csv"`).
+    - If accessed on-demand or after database modifications, dynamically queries current PostgreSQL transactions, formats them into CSV, updates disk cache, and streams the file to the browser.
+
+
+#### [`server-node/src/routes/payment.routes.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/routes/payment.routes.ts) & [`payment.controller.ts`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/payment.controller.ts)
+
+- **What this file does when Rohan pays**:
+  - `POST /api/payment/create-order`: Creates a checkout order for frontend simulation.
+  - `POST /api/payment/verify-payment`:
+    1. Verifies HMAC signature of `${order_id}|${payment_id}`.
+    2. Updates `Transaction` status to `RECOVERED`.
+    3. **Enforces Stopping Rule**: Cancels all pending recovery actions.
+    4. Logs `PAYMENT_RECOVERED` to `AuditLog`.
+
+---
+
+## 5. The 4 Enterprise Stopping Rules
+
+Enterprise compliance requires strict bounds on customer outreach:
 
 1. **Immediate Success Cancellation (Stopping Rule #1)**:
-   - In [`webhook.controller.ts:145-156`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/webhook.controller.ts#L145-L156): When Razorpay fires `payment.captured` or `payment_link.paid`, the system queries all `PENDING` and `SCHEDULED` actions for that transaction and updates them to `CANCELLED` with reason `"Payment received — stopping recovery"`. No further emails, calls, or retries will be dispatched.
+   - When a payment succeeds (via webhook or checkout verification), [`webhook.controller.ts:169-180`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/webhook.controller.ts#L169-L180) and [`payment.controller.ts:85-94`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/controllers/payment.controller.ts#L85-L94) immediately mark all `PENDING` and `SCHEDULED` actions as `CANCELLED` with `cancelReason: "Payment received — stopping recovery"`.
 2. **Maximum 3 Retry Threshold (Stopping Rule #2)**:
-   - In [`recovery-engine.ts:32-40`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/recovery-engine.ts#L32-L40): If `transaction.retryCount >= 3`, recovery is immediately halted, status is set to `ABANDONED`, and `MAX_RETRIES_REACHED` is logged.
+   - In [`recovery-engine.ts:25-32`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/recovery-engine.ts#L25-L32): If `transaction.retryCount >= 3`, recovery is immediately halted, status is set to `ABANDONED`, and `MAX_RETRIES_REACHED` is logged.
 3. **Fraud & Risk Suppression (Stopping Rule #3)**:
-   - In [`recovery_probability.py:121-127`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/models/recovery_probability.py#L121-L127) and [`root_cause_agent.py:47`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/agents/root_cause_agent.py#L47): Transactions with error code `SUSPECTED_FRAUD` or recovery probability $< 0.10$ are assigned `NO_ACTION`. No outreach is attempted.
-4. **Time-To-Live Link Expiry (Stopping Rule #4)**:
-   - In [`razorpay.service.ts:61`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/razorpay.service.ts#L61): Every payment link is generated with an explicit 48-hour expiration (`expire_by: Date.now() + 48 hours`). Expired links cannot be paid, preventing stale transactions from executing months later.
+   - In [`recovery_probability.py:82-84`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/models/recovery_probability.py#L82-L84) and [`root_cause_agent.py:97-100`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-python/agents/root_cause_agent.py#L97-L100): Transactions with `SUSPECTED_FRAUD` or $P < 0.10$ are forced to `NO_ACTION` and `status = "ABANDONED"`. Zero outreach is attempted.
+4. **24-Hour Link Expiration (Stopping Rule #4)**:
+   - In [`recovery-engine.ts:153`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/recovery-engine.ts#L153) and [`razorpay.service.ts:54`](file:///e:/CodeWork/PROJECT-PLAYGROUND/Revenue%20Recovery/server-node/src/services/razorpay.service.ts#L54): Every generated link expires after 24 hours (`expireBy: now + 24*3600`). Customers cannot accidentally pay for stale, abandoned orders weeks later.
 
 ---
 
-## 8. Quick Reference: Input -> Process -> Output Matrix
+## 6. Master Input -> File -> Output Reference Matrix
 
-| Step / Goal | File(s) Handling Input | File(s) Processing / Logic | File(s) Storing / Returning Results | Output / Result |
-| :--- | :--- | :--- | :--- | :--- |
-| **Ingest Failed Payment** | `server-node/src/controllers/webhook.controller.ts` | `webhook.controller.ts`, `razorpay.service.ts` | `prisma/schema.prisma` (`Transaction`, `Customer`) | New `Transaction` record created with status `FAILED` |
-| **Generate Demo Seed Data** | `server-node/src/controllers/seed.controller.ts` | `seed.controller.ts` | `prisma/schema.prisma` | 50 diverse failed transactions inserted into Supabase DB |
-| **Compute Recovery Probability** | `server-node/src/services/python-bridge.ts` | `server-python/models/recovery_probability.py` | `server-python/routes/analyze.py` | Float $P(\text{recovery}) \in [0.0, 1.0]$ and recommended base action |
-| **Diagnose Root Cause & Validate** | `server-python/routes/analyze.py` | `server-python/agents/root_cause_agent.py` (Gemini 2.5 Flash) | `server-python/routes/analyze.py` | JSON containing `root_cause`, `reasoning`, `validated_action`, `customer_sentiment` |
-| **Generate Payment Link** | `server-node/src/services/recovery-engine.ts` | `server-node/src/services/razorpay.service.ts` | `prisma/schema.prisma` (`RecoveryAction.paymentLinkUrl`) | Active Razorpay link (`https://rzp.io/l/...`) with 48h TTL |
-| **Generate Localized Audio** | `server-node/src/services/python-bridge.ts` | `server-python/agents/hinglish_voice.py` (gTTS) | `server-python/audio_files/*.mp3`, `prisma/schema.prisma` (`voiceAudioPath`) | Custom Hinglish speech audio file ready for phone or dashboard playback |
-| **Execute & Track Recovery Action** | `server-node/src/services/recovery-engine.ts` | `recovery-engine.ts` | `prisma/schema.prisma` (`RecoveryAction`, `Transaction`, `AuditLog`) | Status updated to `IN_RECOVERY`, `retryCount + 1`, logged to audit trail |
-| **Stop Pending Actions on Success** | `server-node/src/controllers/webhook.controller.ts` | `webhook.controller.ts` | `prisma/schema.prisma` (`Transaction.status = RECOVERED`, `RecoveryAction.status = CANCELLED`) | All pending actions cancelled, recovered sum credited |
-| **Serve Dashboard KPIs & Tables** | `server-node/src/routes/dashboard.routes.ts` | `server-node/src/controllers/dashboard.controller.ts` | `client/src/api.ts` $\rightarrow$ React UI | Dynamic metrics, charts, transactions list, and audio player |
+| Step / Goal                                | Ingestion File                                                     | Processing File                                | Persistence / Output File                             | Resulting Transformation on Dataset                                                         |
+| :----------------------------------------- | :----------------------------------------------------------------- | :--------------------------------------------- | :---------------------------------------------------- | :------------------------------------------------------------------------------------------ |
+| **1. Webhook Intake**                      | `server-node/src/index.ts`                                         | `src/controllers/webhook.controller.ts`        | `src/services/razorpay.service.ts`                    | Raw Buffer captured, signature verified, HTTP 200 returned in <100ms                        |
+| **2. Customer & Transaction Storage**      | `src/controllers/webhook.controller.ts`                            | `src/services/db.ts`                           | `prisma/schema.prisma` (`Customer`, `Transaction`)    | `Customer` record upserted, `Transaction` created with `status: "FAILED"`                   |
+| **3. AI Bridge & Dispatch**                | `src/services/recovery-engine.ts`                                  | `src/services/python-bridge.ts`                | HTTP POST to `server-python:8000/analyze`             | Context payload assembled and transmitted to Python AI service                              |
+| **4. Statistical Scoring**                 | `server-python/routes/analyze.py`                                  | `server-python/models/recovery_probability.py` | `models/recovery_probability.py`                      | Computes $P(\text{recovery})=0.808$ and base action `HINGLISH_VOICE_CALL`                   |
+| **5. Cognitive LLM Validation**            | `server-python/routes/analyze.py`                                  | `server-python/agents/root_cause_agent.py`     | Gemini 2.5 Flash API                                  | Enriches root cause diagnosis, sentiment analysis, and action validation                    |
+| **6. Localized Voice Synthesis**           | `server-python/routes/voice.py`                                    | `server-python/agents/hinglish_voice.py`       | `server-python/audio_files/*.mp3`                     | Natural Hinglish script built and converted to `.mp3` via gTTS                              |
+| **7. Payment Link Generation**             | `src/services/recovery-engine.ts`                                  | `src/services/razorpay.service.ts`             | Razorpay API & `prisma/schema.prisma`                 | Active payment link generated (`https://rzp.io/l/...`) with 24h TTL                         |
+| **8. Action Execution & State Transition** | `src/services/recovery-engine.ts`                                  | `src/services/audit.service.ts`                | `prisma/schema.prisma` (`RecoveryAction`, `AuditLog`) | `RecoveryAction` created, transaction status moved to `IN_RECOVERY`, retryCount bumped to 1 |
+| **9. Background Cron Follow-up**           | `src/jobs/retry-sequencer.ts`                                      | `src/jobs/retry-sequencer.ts`                  | `prisma/schema.prisma`                                | Scheduled delays executed; overdue promise dates and B2B escalations tracked                |
+| **10. Payment Recovery & Stopping Rule**   | `src/controllers/webhook.controller.ts` or `payment.controller.ts` | `src/controllers/payment.controller.ts`        | `prisma/schema.prisma`                                | Transaction marked `RECOVERED`, all pending actions updated to `CANCELLED`                  |
+| **11. Frontend Presentation**              | `src/routes/dashboard.routes.ts`                                   | `src/controllers/dashboard.controller.ts`      | React Client UI (`client/src/api.ts`)                 | Real-time KPI counters incremented, live audio player rendered, audit stream populated      |

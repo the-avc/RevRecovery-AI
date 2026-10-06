@@ -1,46 +1,73 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getTransactions } from '../api';
-import type { Transaction } from '../api';
-import { format } from 'date-fns';
-import { Filter } from 'lucide-react';
-import { ACTION_ICONS, cardBase } from '../constants';
-import { StatusBadge, FailureBadge } from '../components/ui/Badge';
-import Pagination from '../components/ui/Pagination';
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { getTransactions, downloadCSV } from "../api";
+import type { Transaction } from "../api";
+import { format } from "date-fns";
+import { Filter, Download } from "lucide-react";
+import { ACTION_ICONS, cardBase } from "../constants";
+import { StatusBadge, FailureBadge } from "../components/ui/Badge";
+import Pagination from "../components/ui/Pagination";
 
 export default function TransactionsPage() {
-  const [data, setData] = useState<{ transactions: Transaction[]; total: number; totalPages: number }>({
-    transactions: [], total: 0, totalPages: 0,
+  const [data, setData] = useState<{
+    transactions: Transaction[];
+    total: number;
+    totalPages: number;
+  }>({
+    transactions: [],
+    total: 0,
+    totalPages: 0,
   });
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
     setLoading(true);
-    getTransactions({ page, limit: 20, status: statusFilter || undefined, failureType: typeFilter || undefined })
-      .then(res => { setData(res); setLoading(false); })
+    getTransactions({
+      page,
+      limit: 20,
+      status: statusFilter || undefined,
+      failureType: typeFilter || undefined,
+    })
+      .then((res) => {
+        setData(res);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, [page, statusFilter, typeFilter]);
 
   const fmt = (n: number) =>
-    new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
+    new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 0,
+    }).format(n);
 
   const selectClass =
-    'bg-[#0d0d1f] border border-[rgba(139,92,246,0.2)] text-[#f0f0ff] px-4 py-2.5 rounded-xl text-sm cursor-pointer outline-none focus:border-violet-500 transition-colors hover:border-violet-500/40';
+    "bg-[#0d0d1f] border border-[rgba(139,92,246,0.2)] text-[#f0f0ff] px-4 py-2.5 rounded-xl text-sm cursor-pointer outline-none focus:border-violet-500 transition-colors hover:border-violet-500/40";
 
   return (
     <div className="px-6 sm:px-8 lg:px-10 py-8 max-w-[1400px] mx-auto">
       {/* Header */}
-      <div className="mb-7">
-        <h1 className="text-2xl sm:text-3xl font-extrabold font-space mb-1.5 text-[#f0f0ff]">
-          Transactions
-        </h1>
-        <p className="text-[#8b8baf]">
-          {data.total} transactions across all failure types
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-7">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold font-space mb-1.5 text-[#f0f0ff]">
+            Transactions
+          </h1>
+          <p className="text-[#8b8baf]">
+            {data.total} transactions across all failure types
+          </p>
+        </div>
+        <button
+          onClick={downloadCSV}
+          className="flex items-center gap-2 text-sm text-[#f0f0ff] bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 hover:border-violet-500/50 px-4 py-2.5 rounded-xl transition-all shadow-sm w-fit cursor-pointer"
+        >
+          <Download size={15} className="text-violet-400" />
+          <span>Export CSV</span>
+        </button>
       </div>
 
       {/* Filters */}
@@ -51,7 +78,10 @@ export default function TransactionsPage() {
         </div>
         <select
           value={statusFilter}
-          onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
           className={selectClass}
         >
           <option value="">All Statuses</option>
@@ -64,7 +94,10 @@ export default function TransactionsPage() {
 
         <select
           value={typeFilter}
-          onChange={e => { setTypeFilter(e.target.value); setPage(1); }}
+          onChange={(e) => {
+            setTypeFilter(e.target.value);
+            setPage(1);
+          }}
           className={selectClass}
         >
           <option value="">All Failure Types</option>
@@ -77,7 +110,11 @@ export default function TransactionsPage() {
 
         {(statusFilter || typeFilter) && (
           <button
-            onClick={() => { setStatusFilter(''); setTypeFilter(''); setPage(1); }}
+            onClick={() => {
+              setStatusFilter("");
+              setTypeFilter("");
+              setPage(1);
+            }}
             className="text-xs text-violet-400 hover:text-violet-300 transition-colors px-3 py-2 rounded-lg bg-violet-500/10 border border-violet-500/20"
           >
             Clear filters
@@ -97,7 +134,15 @@ export default function TransactionsPage() {
             <table className="w-full border-collapse" style={{ minWidth: 700 }}>
               <thead>
                 <tr>
-                  {['Customer', 'Amount', 'Failure Type', 'Status', 'AI Action', 'Recovery Prob.', 'Date'].map(h => (
+                  {[
+                    "Customer",
+                    "Amount",
+                    "Failure Type",
+                    "Status",
+                    "AI Action",
+                    "Recovery Prob.",
+                    "Date",
+                  ].map((h) => (
                     <th
                       key={h}
                       className="text-left px-5 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-[#8b8baf] border-b border-violet-500/10 bg-[#0d0d1f]"
@@ -110,12 +155,16 @@ export default function TransactionsPage() {
               <tbody>
                 {data.transactions.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center p-12 text-[#8b8baf] text-sm">
-                      No transactions found. Generate mock data from the Dashboard first.
+                    <td
+                      colSpan={7}
+                      className="text-center p-12 text-[#8b8baf] text-sm"
+                    >
+                      No transactions found. Generate mock data from the
+                      Dashboard first.
                     </td>
                   </tr>
                 ) : (
-                  data.transactions.map(txn => {
+                  data.transactions.map((txn) => {
                     const lastAction = txn.recoveryActions?.[0];
                     return (
                       <tr
@@ -125,17 +174,23 @@ export default function TransactionsPage() {
                       >
                         {/* Customer */}
                         <td className="px-5 py-3.5 border-b border-violet-500/5">
-                          <div className="font-medium text-[#f0f0ff] text-sm">{txn.customer?.name}</div>
+                          <div className="font-medium text-[#f0f0ff] text-sm">
+                            {txn.customer?.name}
+                          </div>
                           <div className="text-xs text-[#8b8baf] mt-0.5">
-                            {txn.customer?.type === 'B2B' && (
-                              <span className="text-blue-400 font-semibold">B2B · </span>
+                            {txn.customer?.type === "B2B" && (
+                              <span className="text-blue-400 font-semibold">
+                                B2B ·{" "}
+                              </span>
                             )}
                             {txn.customer?.email}
                           </div>
                         </td>
                         {/* Amount */}
                         <td className="px-5 py-3.5 border-b border-violet-500/5">
-                          <div className="font-bold text-[#f0f0ff]">{fmt(txn.amount)}</div>
+                          <div className="font-bold text-[#f0f0ff]">
+                            {fmt(txn.amount)}
+                          </div>
                           {txn.recoveredAmount && (
                             <div className="text-xs text-emerald-400 font-medium mt-0.5">
                               ✓ {fmt(txn.recoveredAmount)}
@@ -145,7 +200,9 @@ export default function TransactionsPage() {
                         {/* Failure type */}
                         <td className="px-5 py-3.5 border-b border-violet-500/5">
                           <FailureBadge failureType={txn.failureType} />
-                          <div className="text-[11px] text-[#8b8baf] mt-1">{txn.errorCode}</div>
+                          <div className="text-[11px] text-[#8b8baf] mt-1">
+                            {txn.errorCode}
+                          </div>
                         </td>
                         {/* Status */}
                         <td className="px-5 py-3.5 border-b border-violet-500/5">
@@ -155,9 +212,9 @@ export default function TransactionsPage() {
                         <td className="px-5 py-3.5 border-b border-violet-500/5 text-[13px] text-[#f0f0ff]">
                           {lastAction ? (
                             <span>
-                              {ACTION_ICONS[lastAction.actionType] || '❓'}{' '}
+                              {ACTION_ICONS[lastAction.actionType] || "❓"}{" "}
                               <span className="text-[#8b8baf] text-[12px]">
-                                {lastAction.actionType.replace(/_/g, ' ')}
+                                {lastAction.actionType.replace(/_/g, " ")}
                               </span>
                             </span>
                           ) : (
@@ -171,21 +228,28 @@ export default function TransactionsPage() {
                               <div className="w-14 h-1.5 bg-violet-500/15 rounded-full overflow-hidden">
                                 <div
                                   className={`h-full rounded-full ${
-                                    lastAction.recoveryProb > 0.7 ? 'bg-emerald-400' :
-                                    lastAction.recoveryProb > 0.4 ? 'bg-amber-400' : 'bg-red-400'
+                                    lastAction.recoveryProb > 0.7
+                                      ? "bg-emerald-400"
+                                      : lastAction.recoveryProb > 0.4
+                                        ? "bg-amber-400"
+                                        : "bg-red-400"
                                   }`}
-                                  style={{ width: `${(lastAction.recoveryProb * 100).toFixed(0)}%` }}
+                                  style={{
+                                    width: `${(lastAction.recoveryProb * 100).toFixed(0)}%`,
+                                  }}
                                 />
                               </div>
                               <span className="text-xs text-[#8b8baf]">
                                 {(lastAction.recoveryProb * 100).toFixed(0)}%
                               </span>
                             </div>
-                          ) : <span className="text-[#8b8baf]">—</span>}
+                          ) : (
+                            <span className="text-[#8b8baf]">—</span>
+                          )}
                         </td>
                         {/* Date */}
                         <td className="px-5 py-3.5 border-b border-violet-500/5 text-[13px] text-[#8b8baf] whitespace-nowrap">
-                          {format(new Date(txn.createdAt), 'MMM d, HH:mm')}
+                          {format(new Date(txn.createdAt), "MMM d, HH:mm")}
                         </td>
                       </tr>
                     );
@@ -199,8 +263,8 @@ export default function TransactionsPage() {
         <Pagination
           page={page}
           totalPages={data.totalPages}
-          onPrev={() => setPage(p => Math.max(1, p - 1))}
-          onNext={() => setPage(p => Math.min(data.totalPages, p + 1))}
+          onPrev={() => setPage((p) => Math.max(1, p - 1))}
+          onNext={() => setPage((p) => Math.min(data.totalPages, p + 1))}
         />
       </div>
     </div>

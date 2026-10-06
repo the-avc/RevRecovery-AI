@@ -74,6 +74,7 @@ async def analyze(ctx: TransactionContext):
     llm_analysis = await analyze_transaction(
         transaction_context={
             "transaction_id": ctx.transactionId,
+            "customer_name": ctx.customerName,
             "customer_type": ctx.customerType,
             "amount_inr": ctx.amount,
             "failure_type": ctx.failureType,
@@ -88,14 +89,21 @@ async def analyze(ctx: TransactionContext):
         recovery_probability=recovery_prob,
     )
 
+    final_action = llm_analysis.get("validated_action", math_decision["action"])
+    scheduled_delay = math_decision.get("scheduled_delay_minutes")
+    if final_action in ("IMMEDIATE_RETRY_LINK", "NO_ACTION"):
+        scheduled_delay = None
+    elif final_action == "DELAYED_RETRY_LINK" and not scheduled_delay:
+        scheduled_delay = 60
+
     return AIDecisionResponse(
-        action=llm_analysis.get("validated_action", math_decision["action"]),
+        action=final_action,
         rootCause=llm_analysis.get("root_cause", "Payment processing failure"),
         reasoning=llm_analysis.get("reasoning", math_decision.get("reason", "")),
         confidence=llm_analysis.get("confidence", recovery_prob),
         recoveryProbability=recovery_prob,
-        scheduledDelay=math_decision.get("scheduled_delay_minutes"),
-        discountPercent=math_decision.get("discount_percent"),
+        scheduledDelay=scheduled_delay,
+        discountPercent=math_decision.get("discount_percent") if final_action not in ("NO_ACTION", "B2B_REMINDER_EMAIL", "B2B_FIRM_EMAIL", "B2B_ESCALATION_EMAIL") else None,
         hinglishMessage=llm_analysis.get("hinglish_message"),
         customerSentiment=llm_analysis.get("customer_sentiment"),
     )
